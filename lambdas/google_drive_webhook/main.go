@@ -51,11 +51,16 @@ func main() {
 	slog.Info(">>GoogleDriveWebhook.main")
 	defer slog.Info("<<GoogleDriveWebhook.main")
 
-	store := database.NewDynamoDBClient()
+	store, err := database.NewDynamoDBClient()
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		os.Exit(1)
+	}
+
 	driveContext, err := google.NewGoogleDrive(store)
 	if err != nil {
 		//
-		slog.Error("failed to initialize the Google Drive service context", "error", err)
+		slog.Error("Failed to initialize the Google Drive service context", "error", err)
 		os.Exit(1)
 	}
 

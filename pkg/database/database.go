@@ -1,17 +1,19 @@
 package database
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
-	"github.com/KyleBrandon/scriptor/pkg/types"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
-	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	stypes "github.com/KyleBrandon/scriptor/pkg/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -21,40 +23,45 @@ const (
 
 type WatchChannelStore interface {
 	DoesWatchChannelExist(folderID string) (bool, error)
-	InsertWatchChannel(watchChannel types.WatchChannel) error
-	UpdateWatchChannel(watchChannel types.WatchChannel) error
-	GetWatchChannelByFolder(folderID string) (types.WatchChannel, error)
-	GetActiveWatchChannels() ([]types.WatchChannel, error)
-	GetWatchChannels() ([]types.WatchChannel, error)
+	InsertWatchChannel(watchChannel stypes.WatchChannel) error
+	UpdateWatchChannel(watchChannel stypes.WatchChannel) error
+	GetWatchChannelByFolder(folderID string) (stypes.WatchChannel, error)
+	GetActiveWatchChannels() ([]stypes.WatchChannel, error)
+	GetWatchChannels() ([]stypes.WatchChannel, error)
 }
 
 type DynamoDBClient struct {
-	store *dynamodb.DynamoDB
+	store *dynamodb.Client
 }
 
-func NewDynamoDBClient() WatchChannelStore {
-	dbSession := session.Must(session.NewSession())
-	db := dynamodb.New(dbSession)
-
-	return DynamoDBClient{
-		store: db,
+func NewDynamoDBClient() (WatchChannelStore, error) {
+	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDBClient", "error", err)
+		return nil, err
 	}
+
+	db := dynamodb.NewFromConfig(awsCfg)
+
+	return &DynamoDBClient{
+		store: db,
+	}, nil
 }
 
-func (u DynamoDBClient) GetWatchChannels() ([]types.WatchChannel, error) {
+func (u DynamoDBClient) GetWatchChannels() ([]stypes.WatchChannel, error) {
 	scanInput := &dynamodb.ScanInput{
 		TableName: aws.String(WATCH_CHANNEL_TABLE_NAME),
 	}
 
 	// Execute Scan
-	result, err := u.store.Scan(scanInput)
+	result, err := u.store.Scan(context.TODO(), scanInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan watch channels: %w", err)
 	}
 
 	// Convert DynamoDB result into a slice of WatchChannels
-	var wcs []types.WatchChannel
-	err = dynamodbattribute.UnmarshalListOfMaps(result.Items, &wcs)
+	var wcs []stypes.WatchChannel
+	err = attributevalue.UnmarshalListOfMaps(result.Items, &wcs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal DynamoDB items: %w", err)
 	}
@@ -65,12 +72,10 @@ func (u DynamoDBClient) GetWatchChannels() ([]types.WatchChannel, error) {
 
 // Does this user exist?
 func (u DynamoDBClient) DoesWatchChannelExist(folderID string) (bool, error) {
-	result, err := u.store.GetItem(&dynamodb.GetItemInput{
+	result, err := u.store.GetItem(context.TODO(), &dynamodb.GetItemInput{
 		TableName: aws.String(WATCH_CHANNEL_TABLE_NAME),
-		Key: map[string]*dynamodb.AttributeValue{
-			"folder_id": {
-				S: aws.String(folderID),
-			},
+		Key: map[string]types.AttributeValue{
+			"folder_id": &types.AttributeValueMemberS{Value: folderID},
 		},
 	})
 
@@ -86,34 +91,22 @@ func (u DynamoDBClient) DoesWatchChannelExist(folderID string) (bool, error) {
 	return true, nil
 }
 
-func (u DynamoDBClient) InsertWatchChannel(watchChannel types.WatchChannel) error {
+func (u DynamoDBClient) InsertWatchChannel(watchChannel stypes.WatchChannel) error {
 
 	// Create DynamoDB Table
 	item := &dynamodb.PutItemInput{
 		TableName: aws.String(WATCH_CHANNEL_TABLE_NAME),
-		Item: map[string]*dynamodb.AttributeValue{
-			"folder_id": {
-				S: aws.String(watchChannel.FolderID),
-			},
-			"archive_folder_id": {
-				S: aws.String(watchChannel.ArchiveFolderID),
-			},
-			"destination_folder_id": {
-				S: aws.String(watchChannel.DestinationFolderID),
-			},
-			"channel_id": {
-				S: aws.String(watchChannel.ChannelID),
-			},
-			"expires_at": {
-				N: aws.String(strconv.FormatInt(watchChannel.ExpiresAt, 10)),
-			},
-			"webhook_url": {
-				S: aws.String(watchChannel.WebhookUrl),
-			},
+		Item: map[string]types.AttributeValue{
+			"folder_id":             &types.AttributeValueMemberS{Value: watchChannel.FolderID},
+			"archive_folder_id":     &types.AttributeValueMemberS{Value: watchChannel.ArchiveFolderID},
+			"destination_folder_id": &types.AttributeValueMemberS{Value: watchChannel.DestinationFolderID},
+			"channel_id":            &types.AttributeValueMemberS{Value: watchChannel.ChannelID},
+			"expires_at":            &types.AttributeValueMemberN{Value: strconv.FormatInt(watchChannel.ExpiresAt, 10)},
+			"webhook_url":           &types.AttributeValueMemberS{Value: watchChannel.WebhookUrl},
 		},
 	}
 
-	_, err := u.store.PutItem(item)
+	_, err := u.store.PutItem(context.TODO(), item)
 	if err != nil {
 		return err
 	}
@@ -121,40 +114,28 @@ func (u DynamoDBClient) InsertWatchChannel(watchChannel types.WatchChannel) erro
 	return nil
 }
 
-func (u DynamoDBClient) UpdateWatchChannel(watchChannel types.WatchChannel) error {
+func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) error {
 
 	// Define the primary key
-	key := map[string]*dynamodb.AttributeValue{
-		"folder_id": {
-			S: aws.String(watchChannel.FolderID),
-		},
+	key := map[string]types.AttributeValue{
+		"folder_id": &types.AttributeValueMemberS{Value: watchChannel.FolderID},
 	}
 
 	// Define the update expression
-	updateExpression := `SET 
-		channel_id = :channel_id,
-		archive_folder_id = :archive_folder_id,
-		destination_folder_id = :destination_folder_id,
-		expires_at = :expires_at,
-		webhook_url = :webhook_url`
+	updateExpression := `SET
+			channel_id = :channel_id,
+			archive_folder_id = :archive_folder_id,
+			destination_folder_id = :destination_folder_id,
+			expires_at = :expires_at,
+			webhook_url = :webhook_url`
 
 	// Define the new values
-	expressionAttributeValues := map[string]*dynamodb.AttributeValue{
-		":channel_id": {
-			S: aws.String(watchChannel.ChannelID),
-		},
-		":archive_folder_id": {
-			S: aws.String(watchChannel.ArchiveFolderID),
-		},
-		":destination_folder_id": {
-			S: aws.String(watchChannel.DestinationFolderID),
-		},
-		":expires_at": {
-			N: aws.String(strconv.FormatInt(watchChannel.ExpiresAt, 10)),
-		},
-		":webhook_url": {
-			S: aws.String(watchChannel.WebhookUrl),
-		},
+	expressionAttributeValues := map[string]types.AttributeValue{
+		":channel_id":            &types.AttributeValueMemberS{Value: watchChannel.ChannelID},
+		":archive_folder_id":     &types.AttributeValueMemberS{Value: watchChannel.ArchiveFolderID},
+		":destination_folder_id": &types.AttributeValueMemberS{Value: watchChannel.DestinationFolderID},
+		":expires_at":            &types.AttributeValueMemberN{Value: strconv.FormatInt(watchChannel.ExpiresAt, 10)},
+		":webhook_url":           &types.AttributeValueMemberS{Value: watchChannel.WebhookUrl},
 	}
 
 	// Build the update input
@@ -163,11 +144,11 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel types.WatchChannel) erro
 		Key:                       key,
 		UpdateExpression:          aws.String(updateExpression),
 		ExpressionAttributeValues: expressionAttributeValues,
-		ReturnValues:              aws.String("UPDATED_NEW"), // Return the updated attributes
+		ReturnValues:              types.ReturnValueUpdatedNew, // Return the updated attributes
 	}
 
 	// Perform the update
-	_, err := u.store.UpdateItem(input)
+	_, err := u.store.UpdateItem(context.TODO(), input)
 	if err != nil {
 		log.Printf("Failed to update item: %v", err)
 		return err
@@ -176,15 +157,13 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel types.WatchChannel) erro
 	return nil
 }
 
-func (u DynamoDBClient) GetWatchChannelByFolder(folderID string) (types.WatchChannel, error) {
-	var wc types.WatchChannel
+func (u DynamoDBClient) GetWatchChannelByFolder(folderID string) (stypes.WatchChannel, error) {
+	var wc stypes.WatchChannel
 
-	result, err := u.store.GetItem(&dynamodb.GetItemInput{
+	result, err := u.store.GetItem(context.TODO(), &dynamodb.GetItemInput{
 		TableName: aws.String(WATCH_CHANNEL_TABLE_NAME),
-		Key: map[string]*dynamodb.AttributeValue{
-			"folder_id": {
-				S: aws.String(folderID),
-			},
+		Key: map[string]types.AttributeValue{
+			"folder_id": &types.AttributeValueMemberS{Value: folderID},
 		},
 	})
 
@@ -196,7 +175,7 @@ func (u DynamoDBClient) GetWatchChannelByFolder(folderID string) (types.WatchCha
 		return wc, fmt.Errorf("watch channel not found")
 	}
 
-	err = dynamodbattribute.UnmarshalMap(result.Item, &wc)
+	err = attributevalue.UnmarshalMap(result.Item, &wc)
 	if err != nil {
 		return wc, err
 	}
@@ -204,28 +183,26 @@ func (u DynamoDBClient) GetWatchChannelByFolder(folderID string) (types.WatchCha
 	return wc, nil
 }
 
-func (u DynamoDBClient) GetActiveWatchChannels() ([]types.WatchChannel, error) {
+func (u DynamoDBClient) GetActiveWatchChannels() ([]stypes.WatchChannel, error) {
 	expiresAt := time.Now().UnixMilli()
 
 	queryInput := &dynamodb.QueryInput{
 		TableName:              aws.String(WATCH_CHANNEL_TABLE_NAME),
 		IndexName:              aws.String("ExpiresAtIndex"), // Query the GSI
 		KeyConditionExpression: aws.String("expires_at >= :expires"),
-		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
-			":expires": {
-				N: aws.String(fmt.Sprintf("%d", expiresAt)),
-			},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":expires": &types.AttributeValueMemberS{Value: fmt.Sprintf("%d", expiresAt)},
 		},
 	}
 
-	result, err := u.store.Query(queryInput)
+	result, err := u.store.Query(context.TODO(), queryInput)
 	if err != nil {
 		log.Fatalf("Failed to query non-expired watch channels: %v", err)
 	}
 
 	// Convert DynamoDB result into a slice of WatchChannels
-	var wcs []types.WatchChannel
-	err = dynamodbattribute.UnmarshalListOfMaps(result.Items, &wcs)
+	var wcs []stypes.WatchChannel
+	err = attributevalue.UnmarshalListOfMaps(result.Items, &wcs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal DynamoDB items: %w", err)
 	}

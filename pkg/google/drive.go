@@ -5,12 +5,13 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/types"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -41,13 +42,18 @@ func NewGoogleDrive(store database.WatchChannelStore) (*GoogleDriveContext, erro
 }
 
 func getGoogleCredentials() ([]byte, error) {
-	sess := session.Must(session.NewSession())
-	svc := secretsmanager.New(sess)
+	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		slog.Error("failed to load the AWS config", "error", err)
+		os.Exit(1)
+	}
+
+	svc := secretsmanager.NewFromConfig(awsCfg)
 
 	secretName := types.GOOGLE_SERVICE_KEY_SECRET
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
-	result, err := svc.GetSecretValue(input)
+	result, err := svc.GetSecretValue(context.TODO(), input)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +250,7 @@ func (gd *GoogleDriveContext) createWatchChannel(wc types.WatchChannel, url stri
 	// Watch for changes in the folder
 	_, err := gd.driveService.Files.Watch(wc.FolderID, req).Do()
 	if err != nil {
-		slog.Error("Failed to watch folder", "resourceID", wc.FolderID, "error", err)
+		slog.Error("Failed to watch folder", "folderID", wc.FolderID, "error", err)
 		return nil
 	}
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,22 +14,33 @@ import (
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 )
 
 type registerConfig struct {
 	store          database.WatchChannelStore
 	dc             *google.GoogleDriveContext
 	webhookURL     string
-	secretsManager *secretsmanager.SecretsManager
+	secretsManager *secretsmanager.Client
 }
 
 func main() {
 	slog.Info(">>RegisterWebhook.main")
 	defer slog.Info("<<RegisterWebhook.main")
 
-	store := database.NewDynamoDBClient()
+	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		slog.Error("failed to load the AWS config", "error", err)
+		os.Exit(1)
+	}
+
+	store, err := database.NewDynamoDBClient()
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		os.Exit(1)
+	}
+
 	dc, err := google.NewGoogleDrive(store)
 	if err != nil {
 		//
@@ -42,8 +54,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	sess := session.Must(session.NewSession())
-	secretsManager := secretsmanager.New(sess)
+	secretsManager := secretsmanager.NewFromConfig(awsCfg)
 
 	cfg := registerConfig{
 		store,
@@ -51,14 +62,14 @@ func main() {
 		webhookURL,
 		secretsManager}
 
-	err = cfg.seedWatchChannels()
-	if err != nil {
-		slog.Error("Failed to add initial watch channel", "error", err)
-	}
-
 	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 		slog.Info(">>RegisterWebhook.lambda")
 		defer slog.Info("<<RegisterWebhook.lambda")
+
+		err = cfg.seedWatchChannels()
+		if err != nil {
+			slog.Error("Failed to add initial watch channel", "error", err)
+		}
 
 		err := cfg.dc.ReRegisterWebhook(cfg.webhookURL)
 		if err != nil {
@@ -74,7 +85,7 @@ func (cfg registerConfig) getSecret(secretName string) (string, error) {
 
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
-	result, err := cfg.secretsManager.GetSecretValue(input)
+	result, err := cfg.secretsManager.GetSecretValue(context.TODO(), input)
 	if err != nil {
 		return "", err
 	}
@@ -83,38 +94,43 @@ func (cfg registerConfig) getSecret(secretName string) (string, error) {
 }
 
 func (cfg registerConfig) seedWatchChannels() error {
+	slog.Info(">>seedWatchChannels")
+	defer slog.Info("<<seedWatchChannels")
+
 	existing, err := cfg.store.GetWatchChannels()
 	if err != nil {
 		return err
 	}
 
 	// do we have any watch channels configured
-	if len(existing) == 0 {
-		// No watch channels found so we should seed it with one
+	if len(existing) != 0 {
+		slog.Info("No need to seed a watch channel, already configured")
+		return nil
+	}
 
-		folderInfo, err := cfg.getSecret(types.DEFAULT_GOOGLE_FOLDER_LOCATIONS_SECRET)
-		if err != nil {
-			return err
-		}
+	// No watch channels found so we should seed it with one
 
-		var folderLocations types.DefaultGoogleFolderLocations
+	folderInfo, err := cfg.getSecret(types.DEFAULT_GOOGLE_FOLDER_LOCATIONS_SECRET)
+	if err != nil {
+		return err
+	}
 
-		err = json.Unmarshal([]byte(folderInfo), &folderLocations)
-		if err != nil {
-			slog.Error("Failed to unmarshal default Google folder locations from secret manager", "error", err)
-			return err
-		}
+	var folderLocations types.DefaultGoogleFolderLocations
 
-		// Create a watch channel entry in the DB
-		err = cfg.store.InsertWatchChannel(types.WatchChannel{
-			FolderID:            folderLocations.FolderID,
-			ArchiveFolderID:     folderLocations.ArchiveFolderID,
-			DestinationFolderID: folderLocations.DestFolderID,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create the initialze watch channel")
-		}
+	err = json.Unmarshal([]byte(folderInfo), &folderLocations)
+	if err != nil {
+		slog.Error("Failed to unmarshal default Google folder locations from secret manager", "error", err)
+		return err
+	}
 
+	// Create a watch channel entry in the DB
+	err = cfg.store.InsertWatchChannel(types.WatchChannel{
+		FolderID:            folderLocations.FolderID,
+		ArchiveFolderID:     folderLocations.ArchiveFolderID,
+		DestinationFolderID: folderLocations.DestFolderID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create the initialze watch channel")
 	}
 
 	return nil
