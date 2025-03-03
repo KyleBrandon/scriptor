@@ -2,6 +2,8 @@ package stacks
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigateway"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssecretsmanager"
 )
 
@@ -12,11 +14,15 @@ type CdkStackProps struct {
 }
 
 type CdkScriptorConfig struct {
-	App                    awscdk.App
-	Props                  *CdkStackProps
+	App        awscdk.App
+	Props      *CdkStackProps
+	WebhookURL string
+
 	GoogleServiceKeySecret awssecretsmanager.ISecret
 	DefaultFoldersSecret   awssecretsmanager.ISecret
-	WebhookURL             string
+	watchChannelTable      awsdynamodb.Table
+	documentTable          awsdynamodb.Table
+	apiGateway             awsapigateway.RestApi
 }
 
 func NewCdkScriptorConfig() *CdkScriptorConfig {

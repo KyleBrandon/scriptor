@@ -9,6 +9,7 @@ func main() {
 	defer jsii.Close()
 
 	cfg := stacks.NewCdkScriptorConfig()
+	cfg.NewResourcesStack("ScriptorResourcesStack")
 	cfg.NewApiGatewayStack("ScriptorApiGatewayStack")
 	cfg.NewWebHookRegisterStack("ScriptorWebHookReRegisterStack")
 

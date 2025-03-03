@@ -18,19 +18,12 @@ func NewFile(drive *google.GoogleDriveContext, request events.APIGatewayProxyReq
 	// Extract headers sent by Google Drive
 	resourceState := request.Headers["X-Goog-Resource-State"]
 	channelID := request.Headers["X-Goog-Channel-ID"]
-	resourceID := request.Headers["X-Goog-Resource-ID"]
-
-	// // did we receive a notification for an old channel?
-	// if !gd.watchChannelExists(channelID) {
-	// 	slog.Error("watch channel does not exist", "channelID", channelID)
-	// 	gd.stopChannelWatch(channelID, resourceID)
-	// 	return
-	// }
+	// resourceID := request.Headers["X-Goog-Resource-ID"]
 
 	// If we receive a 'sync' notification, ignore it for now.
 	// We could use this for initialzing the state of the vault?
 	if resourceState != "add" {
-		slog.Debug("Webhook received non-add resource state", "channelID", channelID, "resourceID", resourceID, "resourceState", resourceState)
+		slog.Info("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
 		return events.APIGatewayProxyResponse{
 			Body:       "Only interested in new files that are 'add'ed",
 			StatusCode: http.StatusOK,
@@ -38,8 +31,9 @@ func NewFile(drive *google.GoogleDriveContext, request events.APIGatewayProxyReq
 	}
 
 	// Check for new or modified files
-	// drive.QueryFiles()
-	slog.Info("File Received", "channelID", channelID, "resourceID", resourceID, "resourceState", resourceState)
+	drive.QueryFiles()
+
+	slog.Info("File processed", "channelID", channelID)
 
 	return events.APIGatewayProxyResponse{
 		Body:       "Processing new file",
