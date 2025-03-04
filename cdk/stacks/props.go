@@ -2,7 +2,6 @@ package stacks
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
-	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigateway"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssecretsmanager"
 )
@@ -22,7 +21,6 @@ type CdkScriptorConfig struct {
 	DefaultFoldersSecret   awssecretsmanager.ISecret
 	watchChannelTable      awsdynamodb.Table
 	documentTable          awsdynamodb.Table
-	apiGateway             awsapigateway.RestApi
 }
 
 func NewCdkScriptorConfig() *CdkScriptorConfig {

@@ -18,7 +18,7 @@ func NewFile(drive *google.GoogleDriveContext, request events.APIGatewayProxyReq
 	// Extract headers sent by Google Drive
 	resourceState := request.Headers["X-Goog-Resource-State"]
 	channelID := request.Headers["X-Goog-Channel-ID"]
-	// resourceID := request.Headers["X-Goog-Resource-ID"]
+	resourceID := request.Headers["X-Goog-Resource-ID"]
 
 	// If we receive a 'sync' notification, ignore it for now.
 	// We could use this for initialzing the state of the vault?
@@ -31,9 +31,15 @@ func NewFile(drive *google.GoogleDriveContext, request events.APIGatewayProxyReq
 	}
 
 	// Check for new or modified files
-	drive.QueryFiles()
+	err := drive.QueryFiles(channelID, resourceID)
+	if err != nil {
+		slog.Error("Call to QueryFiles failed", "error", err)
 
-	slog.Info("File processed", "channelID", channelID)
+		return events.APIGatewayProxyResponse{
+			Body:       "Failed to query for new files",
+			StatusCode: http.StatusOK,
+		}, nil
+	}
 
 	return events.APIGatewayProxyResponse{
 		Body:       "Processing new file",

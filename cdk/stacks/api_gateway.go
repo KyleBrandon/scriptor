@@ -31,13 +31,28 @@ func (cfg *CdkScriptorConfig) NewApiGatewayStack(id string) awscdk.Stack {
 	// integrate the API Gateway with our lambda
 	integration := awsapigateway.NewLambdaIntegration(myFunction, nil)
 
+	// define our api gateway
+	apiGateway := awsapigateway.NewRestApi(stack, jsii.String("scriptorAPIGateway"), &awsapigateway.RestApiProps{
+		DefaultCorsPreflightOptions: &awsapigateway.CorsOptions{
+			AllowHeaders: jsii.Strings("Content-Type", "Authorization"),
+			AllowMethods: jsii.Strings("GET", "POST", "DELETE", "PUT", "OPTIONS"),
+			AllowOrigins: jsii.Strings("*"),
+		},
+		DeployOptions: &awsapigateway.StageOptions{
+			LoggingLevel: awsapigateway.MethodLoggingLevel_INFO,
+		},
+		EndpointConfiguration: &awsapigateway.EndpointConfiguration{
+			Types: &[]awsapigateway.EndpointType{awsapigateway.EndpointType_REGIONAL},
+		},
+	})
+
 	// Register the route for processing the webhook
-	webhook := cfg.apiGateway.Root().AddResource(jsii.String("webhook"), nil)
+	webhook := apiGateway.Root().AddResource(jsii.String("webhook"), nil)
 	registerRoute := webhook.AddResource(jsii.String("google-drive"), nil)
 	registerRoute.AddMethod(jsii.String("POST"), integration, nil)
 
 	// save the webhook URL
-	cfg.WebhookURL = fmt.Sprintf("%swebhook/google-drive", *cfg.apiGateway.Url())
+	cfg.WebhookURL = fmt.Sprintf("%swebhook/google-drive", *apiGateway.Url())
 
 	return stack
 }

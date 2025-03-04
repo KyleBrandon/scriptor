@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -92,46 +93,64 @@ func (gd *GoogleDriveContext) getDriveService() (*drive.Service, error) {
 // QueryFiles from the watch folder and send them on the channel
 // TODO: Add wait group and process files in Go Routine
 // TODO: send files all at once instead of one at a time
-func (gd *GoogleDriveContext) QueryFiles() {
-	slog.Debug(">>GoogleDrive.checkForNewOrModifiedFiles")
-	defer slog.Debug("<<GoogleDrive.checkForNewOrModifiedFiles")
+func (gd *GoogleDriveContext) QueryFiles(channelID, resourceID string) error {
+	slog.Debug(">>QueryFiles")
+	defer slog.Debug("<<QueryFiles")
+
+	// TODO: query the watch channel based on the channelID and verify the resourceID
+	wc, err := gd.store.GetWatchChannelByChannel(channelID)
+	if err != nil {
+		slog.Error("Failed to find a watch channel for the channel", "channelID", channelID, "error", err)
+		return err
+	}
+
+	// verify the resourceID
+	if resourceID != wc.ResourceID {
+		slog.Error("ResourceID for the channel is not valid", "channelID", channelID, "resourceID", resourceID, "error", err)
+		return err
+	}
 
 	// build the query string to find the new fines in Google Drive
-	query := gd.buildFileSearchQuery()
+	query := gd.buildFileSearchQuery(wc.FolderID)
 
 	fileList, err := gd.driveService.Files.List().Q(query).Fields("files(id, name, parents, createdTime, modifiedTime)").Do()
 	if err != nil {
 		slog.Error("Failed to fetch files", "error", err)
-		return
+		return err
 	}
 
 	if len(fileList.Files) == 0 {
 		slog.Debug("No files found.")
-		return
+		return err
 	}
 
-	slog.Debug("GDriveStorage process file list", "file Count", len(fileList.Files))
+	slog.Info("GDriveStorage process file list", "file Count", len(fileList.Files))
 	for _, file := range fileList.Files {
-		slog.Debug("File:", "fileName", file.Name, "driveID", file.DriveId, "fileID", file.Id, "createdTime", file.CreatedTime, "modifiedTime", file.ModifiedTime)
+		slog.Info("File:", "fileName", file.Name, "driveID", file.DriveId, "fileID", file.Id, "createdTime", file.CreatedTime, "modifiedTime", file.ModifiedTime)
 
-		// createdTime, err := time.Parse(time.RFC3339, file.CreatedTime)
-		// if err != nil {
-		// 	slog.Warn("Failed to parse the created time for the file", "fileID", file.Id, "fileName", file.Name, "createdTime", file.CreatedTime, "error", err)
-		// }
+		createdTime, err := time.Parse(time.RFC3339, file.CreatedTime)
+		if err != nil {
+			slog.Warn("Failed to parse the created time for the file", "fileID", file.Id, "fileName", file.Name, "createdTime", file.CreatedTime, "error", err)
+		}
 
-		// modifiedTime, err := time.Parse(time.RFC3339, file.ModifiedTime)
-		// if err != nil {
-		// 	slog.Warn("Failed to parse the modified time for the file", "fileID", file.Id, "fileName", file.Name, "modifiedTime", file.ModifiedTime, "error", err)
-		// }
+		modifiedTime, err := time.Parse(time.RFC3339, file.ModifiedTime)
+		if err != nil {
+			slog.Warn("Failed to parse the modified time for the file", "fileID", file.Id, "fileName", file.Name, "modifiedTime", file.ModifiedTime, "error", err)
+		}
 
-		// document := Document{
-		// 	StorageDocumentID: file.Id,
-		// 	StorageFolderID:   file.Parents[0],
-		// 	Name:              file.Name,
-		// 	CreatedTime:       createdTime,
-		// 	ModifiedTime:      modifiedTime,
-		// }
+		document := types.Document{
+			ID:           file.Id,
+			FolderID:     file.Parents[0],
+			Name:         file.Name,
+			CreatedTime:  createdTime,
+			ModifiedTime: modifiedTime,
+		}
+
+		slog.Info("detected document", "doc", document)
+
 	}
+
+	return nil
 }
 
 // Write the given file to the storage
@@ -153,42 +172,11 @@ func (gd *GoogleDriveContext) GetReader(document *types.Document) (io.ReadCloser
 	return resp.Body, nil
 }
 
-// func (gd *GoogleDriveContext) watchChannelExists(channelID string) bool {
-// 	for _, v := range gd.channelWatchMap {
-// 		if v.ChannelID == channelID {
-// 			return true
-// 		}
-// 	}
-
-// 	return false
-// }
-
-func (gd *GoogleDriveContext) buildFileSearchQuery() string {
-	query := "mimeType='application/pdf' and ("
-
-	// index := 0
-	// for k := range gd.channelWatchMap {
-	// 	if index != 0 {
-	// 		query = query + " or "
-	// 	}
-	// 	query = fmt.Sprintf("%s'%s' in parents", query, k)
-	// 	index++
-	// }
-
-	// query = query + ")"
+func (gd *GoogleDriveContext) buildFileSearchQuery(folderID string) string {
+	query := fmt.Sprintf("mimeType='application/pdf' and ('%s' in parents)", folderID)
 
 	return query
 }
-
-// func (gd *GoogleDriveContext) stopChannelWatch(channelID, resourceID string) {
-// 	ch := &drive.Channel{
-// 		Id:         channelID,
-// 		ResourceId: resourceID,
-// 	}
-
-// 	// Stop watching the channel
-// 	gd.driveService.Channels.Stop(ch).Do()
-// }
 
 func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {
 	slog.Info(">>ReRegisterWebhook")
@@ -248,12 +236,16 @@ func (gd *GoogleDriveContext) createWatchChannel(wc types.WatchChannel, url stri
 	}
 
 	// Watch for changes in the folder
-	_, err := gd.driveService.Files.Watch(wc.FolderID, req).Do()
+	channel, err := gd.driveService.Files.Watch(wc.FolderID, req).Do()
 	if err != nil {
 		slog.Error("Failed to watch folder", "folderID", wc.FolderID, "error", err)
 		return nil
 	}
 
+	// save the resource identifier from AWS for the channel
+	wc.ResourceID = channel.ResourceId
+
+	// Update the watch channel in the database
 	err = gd.store.UpdateWatchChannel(wc)
 	if err != nil {
 		slog.Error("Failed to create or update the watch channel", "folderID", wc.FolderID, "channelID", wc.ChannelID, "error", err)

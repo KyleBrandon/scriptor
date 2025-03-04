@@ -4,7 +4,6 @@ import (
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-cdk-go/awscdk/v2"
-	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigateway"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssecretsmanager"
 	"github.com/aws/jsii-runtime-go"
@@ -29,7 +28,17 @@ func (cfg *CdkScriptorConfig) NewResourcesStack(id string) awscdk.Stack {
 			},
 		})
 
-	// Add a GSI to query by ExpiresAt
+	// Add a GSI to query by ChannelID
+	cfg.watchChannelTable.AddGlobalSecondaryIndex(&awsdynamodb.GlobalSecondaryIndexProps{
+		IndexName: jsii.String("ChannelIDIndex"),
+		PartitionKey: &awsdynamodb.Attribute{
+			Name: jsii.String("channel_id"),
+			Type: awsdynamodb.AttributeType_STRING,
+		},
+		ProjectionType: awsdynamodb.ProjectionType_ALL,
+	})
+
+	// Add a GSI to query by ChannelID
 	cfg.watchChannelTable.AddGlobalSecondaryIndex(&awsdynamodb.GlobalSecondaryIndexProps{
 		IndexName: jsii.String("ExpiresAtIndex"),
 		PartitionKey: &awsdynamodb.Attribute{
@@ -49,21 +58,6 @@ func (cfg *CdkScriptorConfig) NewResourcesStack(id string) awscdk.Stack {
 		SortKey: &awsdynamodb.Attribute{
 			Name: jsii.String("expires_at"),
 			Type: awsdynamodb.AttributeType_NUMBER,
-		},
-	})
-
-	// define our api gateway
-	cfg.apiGateway = awsapigateway.NewRestApi(stack, jsii.String("scriptorAPIGateway"), &awsapigateway.RestApiProps{
-		DefaultCorsPreflightOptions: &awsapigateway.CorsOptions{
-			AllowHeaders: jsii.Strings("Content-Type", "Authorization"),
-			AllowMethods: jsii.Strings("GET", "POST", "DELETE", "PUT", "OPTIONS"),
-			AllowOrigins: jsii.Strings("*"),
-		},
-		DeployOptions: &awsapigateway.StageOptions{
-			LoggingLevel: awsapigateway.MethodLoggingLevel_INFO,
-		},
-		EndpointConfiguration: &awsapigateway.EndpointConfiguration{
-			Types: &[]awsapigateway.EndpointType{awsapigateway.EndpointType_REGIONAL},
 		},
 	})
 

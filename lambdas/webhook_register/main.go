@@ -56,7 +56,7 @@ func main() {
 
 	secretsManager := secretsmanager.NewFromConfig(awsCfg)
 
-	cfg := registerConfig{
+	cfg := &registerConfig{
 		store,
 		dc,
 		webhookURL,
@@ -81,7 +81,7 @@ func main() {
 	})
 }
 
-func (cfg registerConfig) getSecret(secretName string) (string, error) {
+func (cfg *registerConfig) getSecret(secretName string) (string, error) {
 
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
@@ -93,10 +93,11 @@ func (cfg registerConfig) getSecret(secretName string) (string, error) {
 	return *result.SecretString, nil
 }
 
-func (cfg registerConfig) seedWatchChannels() error {
+func (cfg *registerConfig) seedWatchChannels() error {
 	slog.Info(">>seedWatchChannels")
 	defer slog.Info("<<seedWatchChannels")
 
+	// get all the watch channels
 	existing, err := cfg.store.GetWatchChannels()
 	if err != nil {
 		return err
@@ -108,11 +109,33 @@ func (cfg registerConfig) seedWatchChannels() error {
 		return nil
 	}
 
-	// No watch channels found so we should seed it with one
-
-	folderInfo, err := cfg.getSecret(types.DEFAULT_GOOGLE_FOLDER_LOCATIONS_SECRET)
+	folderLocations, err := cfg.getDefaultFolderLocations()
 	if err != nil {
 		return err
+	}
+
+	// Create a watch channel entry in the DB
+	err = cfg.store.InsertWatchChannel(types.WatchChannel{
+		FolderID:            folderLocations.FolderID,
+		ChannelID:           "DEFALT",
+		ArchiveFolderID:     folderLocations.ArchiveFolderID,
+		DestinationFolderID: folderLocations.DestFolderID,
+	})
+	if err != nil {
+		slog.Error("Failed to create the initialze watch channel", "error", err)
+		return err
+	}
+
+	return nil
+}
+
+func (cfg *registerConfig) getDefaultFolderLocations() (types.DefaultGoogleFolderLocations, error) {
+
+	// no watch channels yet, let's seed a default
+	folderInfo, err := cfg.getSecret(types.DEFAULT_GOOGLE_FOLDER_LOCATIONS_SECRET)
+	if err != nil {
+		slog.Error("Failed to get the default folder locations from AWS secret manager", "error", err)
+		return types.DefaultGoogleFolderLocations{}, err
 	}
 
 	var folderLocations types.DefaultGoogleFolderLocations
@@ -120,18 +143,9 @@ func (cfg registerConfig) seedWatchChannels() error {
 	err = json.Unmarshal([]byte(folderInfo), &folderLocations)
 	if err != nil {
 		slog.Error("Failed to unmarshal default Google folder locations from secret manager", "error", err)
-		return err
+		return types.DefaultGoogleFolderLocations{}, err
 	}
 
-	// Create a watch channel entry in the DB
-	err = cfg.store.InsertWatchChannel(types.WatchChannel{
-		FolderID:            folderLocations.FolderID,
-		ArchiveFolderID:     folderLocations.ArchiveFolderID,
-		DestinationFolderID: folderLocations.DestFolderID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create the initialze watch channel")
-	}
+	return folderLocations, nil
 
-	return nil
 }

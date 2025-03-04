@@ -28,10 +28,12 @@ type Document struct {
 // The ChannelID, ExpiresAt, and WebhookUrl are used to track the Google Drive
 // resource that monitors the folder identified in FolderID.
 type WatchChannel struct {
-	FolderID            string `dynamodbav:"folder_id"`
-	ArchiveFolderID     string `dynamodbav:"archive_folder_id"`
-	DestinationFolderID string `dynamodbav:"destination_folder_id"`
-	ChannelID           string `dynamodbav:"chanel_id"`
-	ExpiresAt           int64  `dynamodbav:"expires_at"`
-	WebhookUrl          string `dynamodbav:"webhook_url"`
+	FolderID            string    `dynamodbav:"folder_id"`
+	ExpiresAt           int64     `dynamodbav:"expires_at"`
+	ChannelID           string    `dynamodbav:"chanel_id"`
+	ResourceID          string    `dynamodbav:"resource_id"`
+	CreatedAt           time.Time `dynamodbav:"created_at"`
+	ArchiveFolderID     string    `dynamodbav:"archive_folder_id"`
+	DestinationFolderID string    `dynamodbav:"destination_folder_id"`
+	WebhookUrl          string    `dynamodbav:"webhook_url"`
 }
