@@ -10,8 +10,9 @@ func main() {
 
 	cfg := stacks.NewCdkScriptorConfig()
 	cfg.NewResourcesStack("ScriptorResourcesStack")
-	cfg.NewApiGatewayStack("ScriptorApiGatewayStack")
+	// cfg.NewApiGatewayStack("ScriptorApiGatewayStack")
 	cfg.NewWebHookRegisterStack("ScriptorWebHookReRegisterStack")
+	cfg.NewDocumentWorkflowStack("ScriptorDocumentWorkflow")
 
 	cfg.App.Synth(nil)
 }

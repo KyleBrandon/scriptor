@@ -14,11 +14,12 @@ type DefaultGoogleFolderLocations struct {
 }
 
 type Document struct {
-	ID           string    `json:"id"`
-	FolderID     string    `json:"folder_id"`
-	Name         string    `json:"name"`
-	CreatedTime  time.Time `json:"created_time"`
-	ModifiedTime time.Time `json:"modified_time"`
+	ID           string    `dynamodbav:"id"`
+	FolderID     string    `dynamodbav:"folder_id"`
+	Name         string    `dynamodbav:"name"`
+	Status       string    `dynamodbav:"status"`
+	CreatedTime  time.Time `dynamodbav:"created_time"`
+	ModifiedTime time.Time `dynamodbav:"modified_time"`
 }
 
 // WatchChannel represents a folder location to watch for new files to process.
@@ -33,6 +34,7 @@ type WatchChannel struct {
 	ChannelID           string    `dynamodbav:"chanel_id"`
 	ResourceID          string    `dynamodbav:"resource_id"`
 	CreatedAt           time.Time `dynamodbav:"created_at"`
+	UpdatedAt           time.Time `dynamodbav:"updated_at"`
 	ArchiveFolderID     string    `dynamodbav:"archive_folder_id"`
 	DestinationFolderID string    `dynamodbav:"destination_folder_id"`
 	WebhookUrl          string    `dynamodbav:"webhook_url"`

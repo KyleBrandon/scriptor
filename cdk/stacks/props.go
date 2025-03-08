@@ -3,7 +3,9 @@ package stacks
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssecretsmanager"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctions"
 )
 
 var SCRIPTOR_BASE_STACK string = "ScriptorInitStack"
@@ -21,6 +23,8 @@ type CdkScriptorConfig struct {
 	DefaultFoldersSecret   awssecretsmanager.ISecret
 	watchChannelTable      awsdynamodb.Table
 	documentTable          awsdynamodb.Table
+	documentBucket         awss3.Bucket
+	stateMachine           awsstepfunctions.StateMachine
 }
 
 func NewCdkScriptorConfig() *CdkScriptorConfig {

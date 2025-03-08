@@ -27,6 +27,7 @@ type WatchChannelStore interface {
 	UpdateWatchChannel(watchChannel stypes.WatchChannel) error
 	GetWatchChannelByChannel(folderID string) (stypes.WatchChannel, error)
 	GetActiveWatchChannels() ([]stypes.WatchChannel, error)
+	InsertDocument(document stypes.Document) error
 }
 
 type DynamoDBClient struct {
@@ -45,6 +46,29 @@ func NewDynamoDBClient() (WatchChannelStore, error) {
 	return &DynamoDBClient{
 		store: db,
 	}, nil
+}
+
+func (u DynamoDBClient) InsertDocument(document stypes.Document) error {
+
+	av, err := attributevalue.MarshalMap(document)
+	if err != nil {
+		slog.Error("Failed to marshal the document", "error", err)
+		return err
+	}
+
+	item := &dynamodb.PutItemInput{
+		TableName: aws.String(DOCUMENT_TABLE_NAME),
+		Item:      av,
+	}
+
+	_, err = u.store.PutItem(context.TODO(), item)
+	if err != nil {
+		slog.Error("Failed to insert the document", "error", err)
+		return err
+	}
+
+	return nil
+
 }
 
 func (u DynamoDBClient) GetWatchChannels() ([]stypes.WatchChannel, error) {
@@ -71,22 +95,23 @@ func (u DynamoDBClient) GetWatchChannels() ([]stypes.WatchChannel, error) {
 
 func (u DynamoDBClient) InsertWatchChannel(watchChannel stypes.WatchChannel) error {
 
+	watchChannel.CreatedAt = time.Now().UTC()
+
+	av, err := attributevalue.MarshalMap(watchChannel)
+	if err != nil {
+		slog.Error("Failed to marshal the document", "error", err)
+		return err
+	}
+
 	// Create DynamoDB Table
 	item := &dynamodb.PutItemInput{
 		TableName: aws.String(WATCH_CHANNEL_TABLE_NAME),
-		Item: map[string]types.AttributeValue{
-			"folder_id":             &types.AttributeValueMemberS{Value: watchChannel.FolderID},
-			"resource_id":           &types.AttributeValueMemberS{Value: watchChannel.ResourceID},
-			"archive_folder_id":     &types.AttributeValueMemberS{Value: watchChannel.ArchiveFolderID},
-			"destination_folder_id": &types.AttributeValueMemberS{Value: watchChannel.DestinationFolderID},
-			"channel_id":            &types.AttributeValueMemberS{Value: watchChannel.ChannelID},
-			"expires_at":            &types.AttributeValueMemberN{Value: strconv.FormatInt(watchChannel.ExpiresAt, 10)},
-			"webhook_url":           &types.AttributeValueMemberS{Value: watchChannel.WebhookUrl},
-		},
+		Item:      av,
 	}
 
-	_, err := u.store.PutItem(context.TODO(), item)
+	_, err = u.store.PutItem(context.TODO(), item)
 	if err != nil {
+		slog.Error("Failed to insert the watch channel", "error", err)
 		return err
 	}
 
@@ -94,6 +119,8 @@ func (u DynamoDBClient) InsertWatchChannel(watchChannel stypes.WatchChannel) err
 }
 
 func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) error {
+
+	watchChannel.UpdatedAt = time.Now().UTC()
 
 	// Define the primary key
 	key := map[string]types.AttributeValue{
@@ -106,6 +133,7 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) err
 			resource_id = :resource_id,
 			archive_folder_id = :archive_folder_id,
 			destination_folder_id = :destination_folder_id,
+			updated_at = :updated_at,
 			expires_at = :expires_at,
 			webhook_url = :webhook_url`
 
@@ -115,6 +143,7 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) err
 		":resource_id":           &types.AttributeValueMemberS{Value: watchChannel.ResourceID},
 		":archive_folder_id":     &types.AttributeValueMemberS{Value: watchChannel.ArchiveFolderID},
 		":destination_folder_id": &types.AttributeValueMemberS{Value: watchChannel.DestinationFolderID},
+		":updated_at":            &types.AttributeValueMemberS{Value: watchChannel.UpdatedAt.String()},
 		":expires_at":            &types.AttributeValueMemberN{Value: strconv.FormatInt(watchChannel.ExpiresAt, 10)},
 		":webhook_url":           &types.AttributeValueMemberS{Value: watchChannel.WebhookUrl},
 	}
@@ -131,7 +160,7 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) err
 	// Perform the update
 	_, err := u.store.UpdateItem(context.TODO(), input)
 	if err != nil {
-		log.Printf("Failed to update item: %v", err)
+		slog.Error("Failed to update item", "error", err)
 		return err
 	}
 
