@@ -11,13 +11,28 @@ import (
 	"github.com/aws/jsii-runtime-go"
 )
 
-func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack) awslambda.Function {
+func (cfg *CdkScriptorConfig) NewDocumentWorkflowStack(id string) awscdk.Stack {
+	stack := awscdk.NewStack(cfg.App, &id, &cfg.Props.StackProps)
+
+	stateMachineArn := cfg.configureStateMachine(stack)
+
+	// configure the download lambda and pass it the state machine ARN so it can start things off
+	_ = cfg.configureDownloadLambda(stack, stateMachineArn)
+
+	return stack
+}
+
+func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack, stateMachineArn string) awslambda.Function {
 
 	// Define Lambda functions for workflow steps
 	downloadLambda := awslambda.NewFunction(stack, jsii.String("scriptorDownloadLambda"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2(),
 		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/workflow_download.zip"), nil), // Path to compiled Go binary
 		Handler: jsii.String("main"),
+		Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
+		Environment: &map[string]*string{
+			"STATE_MACHINE_ARN": jsii.String(stateMachineArn),
+		},
 	})
 
 	// grant lambda permissions to read the secrets
@@ -28,6 +43,9 @@ func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack) awslam
 
 	// grant the lambda read permissions to the watch channel table
 	cfg.watchChannelTable.GrantReadData(downloadLambda)
+
+	// grant the lambda read/write permissions to the S3 staging bucket
+	cfg.documentBucket.GrantReadWrite(downloadLambda, nil)
 
 	// create an integration for our API Gateway
 	integration := awsapigateway.NewLambdaIntegration(downloadLambda, nil)
@@ -58,56 +76,59 @@ func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack) awslam
 
 }
 
-func (cfg *CdkScriptorConfig) NewDocumentWorkflowStack(id string) awscdk.Stack {
-	stack := awscdk.NewStack(cfg.App, &id, &cfg.Props.StackProps)
-
-	downloadLambda := cfg.configureDownloadLambda(stack)
-
+func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) string {
 	mathpixProcessLambda := awslambda.NewFunction(stack, jsii.String("scriptorMathpixProcess"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2(),
 		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/workflow_mathpix_process.zip"), nil),
 		Handler: jsii.String("main"),
+		Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
 	})
 
 	chatgptProcessLambda := awslambda.NewFunction(stack, jsii.String("scriptorChatGPTProcess"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2(),
 		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/workflow_chatgpt_process.zip"), nil),
 		Handler: jsii.String("main"),
+		Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
 	})
 
 	uploadLambda := awslambda.NewFunction(stack, jsii.String("scriptorUploadLambda"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2(),
 		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/workflow_upload.zip"), nil),
 		Handler: jsii.String("main"),
+		Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
 	})
 
-	// 🔹 Step 1: Task - Download file
-	downloadTask := awsstepfunctionstasks.NewLambdaInvoke(stack, jsii.String("DownloadTask"), &awsstepfunctionstasks.LambdaInvokeProps{
-		LambdaFunction: downloadLambda,
-	})
+	taskTimeout := awsstepfunctions.Timeout_Duration(awscdk.Duration_Minutes(jsii.Number(3)))
 
-	// 🔹 Step 2: Task - Send to MathPix
+	// 🔹 Step 1: Task - Send to MathPix
 	mathpixTask := awsstepfunctionstasks.NewLambdaInvoke(stack, jsii.String("MathpixTask"), &awsstepfunctionstasks.LambdaInvokeProps{
 		LambdaFunction: mathpixProcessLambda,
+		TaskTimeout:    taskTimeout,
+		OutputPath:     jsii.String("$.Payload"),
 	})
 
-	// 🔹 Step 3: Task - Send to ChatGPT
+	// 🔹 Step 2: Task - Send to ChatGPT
 	chatgptTask := awsstepfunctionstasks.NewLambdaInvoke(stack, jsii.String("ChatGPTTask"), &awsstepfunctionstasks.LambdaInvokeProps{
 		LambdaFunction: chatgptProcessLambda,
+		TaskTimeout:    taskTimeout,
+		OutputPath:     jsii.String("$.Payload"),
 	})
 
-	// 🔹 Step 4: Task - Upload file
+	// 🔹 Step 3: Task - Upload file
 	uploadTask := awsstepfunctionstasks.NewLambdaInvoke(stack, jsii.String("UploadTask"), &awsstepfunctionstasks.LambdaInvokeProps{
 		LambdaFunction: uploadLambda,
+		TaskTimeout:    taskTimeout,
+		OutputPath:     jsii.String("$.Payload"),
 	})
 
 	// Define workflow sequence
-	workflowDefinition := downloadTask.Next(mathpixTask).Next(chatgptTask).Next(uploadTask)
+	workflowDefinition := mathpixTask.Next(chatgptTask).Next(uploadTask)
 
 	// Create Step Functions state machine
-	cfg.stateMachine = awsstepfunctions.NewStateMachine(stack, jsii.String("FileProcessingStateMachine"), &awsstepfunctions.StateMachineProps{
+	stateMachine := awsstepfunctions.NewStateMachine(stack, jsii.String("FileProcessingStateMachine"), &awsstepfunctions.StateMachineProps{
 		Definition: workflowDefinition,
-		Timeout:    awscdk.Duration_Minutes(jsii.Number(10)), // Workflow timeout
+		Timeout:    awscdk.Duration_Minutes(jsii.Number(15)), // Workflow timeout
 	})
-	return stack
+
+	return *stateMachine.StateMachineArn()
 }

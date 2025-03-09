@@ -26,8 +26,8 @@ type registerConfig struct {
 }
 
 func main() {
-	slog.Info(">>RegisterWebhook.main")
-	defer slog.Info("<<RegisterWebhook.main")
+	slog.Debug(">>RegisterWebhook.main")
+	defer slog.Debug("<<RegisterWebhook.main")
 
 	awsCfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
@@ -63,8 +63,8 @@ func main() {
 		secretsManager}
 
 	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-		slog.Info(">>RegisterWebhook.lambda")
-		defer slog.Info("<<RegisterWebhook.lambda")
+		slog.Debug(">>RegisterWebhook.lambda")
+		defer slog.Debug("<<RegisterWebhook.lambda")
 
 		err = cfg.seedWatchChannels()
 		if err != nil {
@@ -74,10 +74,10 @@ func main() {
 		err := cfg.dc.ReRegisterWebhook(cfg.webhookURL)
 		if err != nil {
 			message := fmt.Sprintf("failed to re-register webhook: %v", err)
-			return util.BuildGatewayResponse(message, http.StatusOK, nil)
+			return util.BuildGatewayResponse(message, http.StatusOK)
 		}
 
-		return util.BuildGatewayResponse("successfully re-regisered webhook", http.StatusOK, nil)
+		return util.BuildGatewayResponse("successfully re-regisered webhook", http.StatusOK)
 	})
 }
 
@@ -94,8 +94,8 @@ func (cfg *registerConfig) getSecret(secretName string) (string, error) {
 }
 
 func (cfg *registerConfig) seedWatchChannels() error {
-	slog.Info(">>seedWatchChannels")
-	defer slog.Info("<<seedWatchChannels")
+	slog.Debug(">>seedWatchChannels")
+	defer slog.Debug("<<seedWatchChannels")
 
 	// get all the watch channels
 	existing, err := cfg.store.GetWatchChannels()
@@ -105,7 +105,7 @@ func (cfg *registerConfig) seedWatchChannels() error {
 
 	// do we have any watch channels configured
 	if len(existing) != 0 {
-		slog.Info("No need to seed a watch channel, already configured")
+		slog.Debug("No need to seed a watch channel, already configured")
 		return nil
 	}
 

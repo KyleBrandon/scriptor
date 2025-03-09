@@ -52,8 +52,8 @@ func (cfg *CdkScriptorConfig) initializeDynamoDB(stack awscdk.Stack) {
 	})
 
 	// register the Document table
-	cfg.documentTable = awsdynamodb.NewTable(stack, jsii.String("Document"), &awsdynamodb.TableProps{
-		TableName: jsii.String("document"),
+	cfg.documentTable = awsdynamodb.NewTable(stack, jsii.String(database.DOCUMENT_TABLE_NAME), &awsdynamodb.TableProps{
+		TableName: jsii.String(database.DOCUMENT_TABLE_NAME),
 		PartitionKey: &awsdynamodb.Attribute{
 			Name: jsii.String("id"),
 			Type: awsdynamodb.AttributeType_STRING,
@@ -66,12 +66,13 @@ func (cfg *CdkScriptorConfig) initializeDynamoDB(stack awscdk.Stack) {
 			Name: jsii.String("status"),
 			Type: awsdynamodb.AttributeType_STRING,
 		},
+		ProjectionType: awsdynamodb.ProjectionType_ALL,
 	})
 }
 
 func (cfg *CdkScriptorConfig) initializeS3Buckets(stack awscdk.Stack) {
 	bucketProps := awss3.BucketProps{
-		BucketName:        jsii.String("scriptor-document-staging"),
+		BucketName:        jsii.String(types.S3_BUCKET_NAME),
 		Versioned:         jsii.Bool(true),
 		RemovalPolicy:     awscdk.RemovalPolicy_RETAIN,
 		AutoDeleteObjects: jsii.Bool(false),

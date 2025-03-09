@@ -12,6 +12,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.41.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.78.1
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.35.0
+	github.com/aws/aws-sdk-go-v2/service/sfn v1.35.1
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.57.2
 	github.com/aws/jsii-runtime-go v1.107.0
 	github.com/google/uuid v1.6.0
 	golang.org/x/oauth2 v0.26.0

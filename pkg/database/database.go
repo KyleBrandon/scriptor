@@ -3,9 +3,8 @@ package database
 import (
 	"context"
 	"fmt"
-	"log"
 	"log/slog"
-	"strconv"
+	"slices"
 	"time"
 
 	stypes "github.com/KyleBrandon/scriptor/pkg/types"
@@ -22,11 +21,11 @@ const (
 )
 
 type WatchChannelStore interface {
+	Ping() error
 	GetWatchChannels() ([]stypes.WatchChannel, error)
 	InsertWatchChannel(watchChannel stypes.WatchChannel) error
 	UpdateWatchChannel(watchChannel stypes.WatchChannel) error
 	GetWatchChannelByChannel(folderID string) (stypes.WatchChannel, error)
-	GetActiveWatchChannels() ([]stypes.WatchChannel, error)
 	InsertDocument(document stypes.Document) error
 }
 
@@ -46,6 +45,13 @@ func NewDynamoDBClient() (WatchChannelStore, error) {
 	return &DynamoDBClient{
 		store: db,
 	}, nil
+}
+
+func (u DynamoDBClient) Ping() error {
+	// perform a quick query to see if the db is up.
+	_, err := u.GetWatchChannels()
+
+	return err
 }
 
 func (u DynamoDBClient) InsertDocument(document stypes.Document) error {
@@ -127,26 +133,12 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) err
 		"folder_id": &types.AttributeValueMemberS{Value: watchChannel.FolderID},
 	}
 
-	// Define the update expression
-	updateExpression := `SET
-			channel_id = :channel_id,
-			resource_id = :resource_id,
-			archive_folder_id = :archive_folder_id,
-			destination_folder_id = :destination_folder_id,
-			updated_at = :updated_at,
-			expires_at = :expires_at,
-			webhook_url = :webhook_url`
-
-	// Define the new values
-	expressionAttributeValues := map[string]types.AttributeValue{
-		":channel_id":            &types.AttributeValueMemberS{Value: watchChannel.ChannelID},
-		":resource_id":           &types.AttributeValueMemberS{Value: watchChannel.ResourceID},
-		":archive_folder_id":     &types.AttributeValueMemberS{Value: watchChannel.ArchiveFolderID},
-		":destination_folder_id": &types.AttributeValueMemberS{Value: watchChannel.DestinationFolderID},
-		":updated_at":            &types.AttributeValueMemberS{Value: watchChannel.UpdatedAt.String()},
-		":expires_at":            &types.AttributeValueMemberN{Value: strconv.FormatInt(watchChannel.ExpiresAt, 10)},
-		":webhook_url":           &types.AttributeValueMemberS{Value: watchChannel.WebhookUrl},
+	av, err := attributevalue.MarshalMap(watchChannel)
+	if err != nil {
+		slog.Error("Failed to marshal the document", "error", err)
+		return err
 	}
+	updateExpression, expressionAttributeValues := buildUpdateExpression(av, []string{"folder_id"})
 
 	// Build the update input
 	input := &dynamodb.UpdateItemInput{
@@ -158,13 +150,35 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) err
 	}
 
 	// Perform the update
-	_, err := u.store.UpdateItem(context.TODO(), input)
+	_, err = u.store.UpdateItem(context.TODO(), input)
 	if err != nil {
 		slog.Error("Failed to update item", "error", err)
 		return err
 	}
 
 	return nil
+}
+
+func buildUpdateExpression(input map[string]types.AttributeValue, excludeKeys []string) (string, map[string]types.AttributeValue) {
+	updateExpr := "SET "
+	exprValues := map[string]types.AttributeValue{}
+	i := 0
+
+	for key, value := range input {
+		// skip the keys
+		if slices.Contains(excludeKeys, key) {
+			continue
+		}
+
+		placeholder := fmt.Sprintf(":val%d", i)
+		updateExpr += fmt.Sprintf("%s = %s, ", key, placeholder)
+		exprValues[placeholder] = value
+		i++
+	}
+
+	// remove trailing comma and space
+	updateExpr = updateExpr[:len(updateExpr)-2]
+	return updateExpr, exprValues
 }
 
 func (u DynamoDBClient) GetWatchChannelByChannel(channelID string) (stypes.WatchChannel, error) {
@@ -195,31 +209,4 @@ func (u DynamoDBClient) GetWatchChannelByChannel(channelID string) (stypes.Watch
 	}
 
 	return wcs[0], nil
-}
-
-func (u DynamoDBClient) GetActiveWatchChannels() ([]stypes.WatchChannel, error) {
-	expiresAt := time.Now().UnixMilli()
-
-	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(WATCH_CHANNEL_TABLE_NAME),
-		IndexName:              aws.String("ExpiresAtIndex"), // Query the GSI
-		KeyConditionExpression: aws.String("expires_at >= :expires"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":expires": &types.AttributeValueMemberS{Value: fmt.Sprintf("%d", expiresAt)},
-		},
-	}
-
-	result, err := u.store.Query(context.TODO(), queryInput)
-	if err != nil {
-		log.Fatalf("Failed to query non-expired watch channels: %v", err)
-	}
-
-	// Convert DynamoDB result into a slice of WatchChannels
-	var wcs []stypes.WatchChannel
-	err = attributevalue.UnmarshalListOfMaps(result.Items, &wcs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal DynamoDB items: %w", err)
-	}
-
-	return wcs, nil
 }

@@ -3,41 +3,102 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/google"
+	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
-)
-
-var (
-	S3_BUCKET_NAME string = "S3_BUCKET_NAME"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 )
 
 type downloadConfig struct {
-	store          database.WatchChannelStore
-	dc             *google.GoogleDriveContext
-	secretsManager *secretsmanager.Client
-	s3Bucket       string
-	awsCfg         aws.Config
+	store           database.WatchChannelStore
+	dc              *google.GoogleDriveContext
+	secretsManager  *secretsmanager.Client
+	awsCfg          aws.Config
+	sfnClient       *sfn.Client
+	stateMachineARN string
+	s3Client        *s3.Client
 }
 
-func (cfg *downloadConfig) processFileNotification(dc *google.GoogleDriveContext, store database.WatchChannelStore, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+var (
+	BucketName string = types.S3_BUCKET_NAME
+	cfg        *downloadConfig
+)
 
-	slog.Info(">>processFileNotification")
-	defer slog.Info("<<processFileNotification")
+func (cfg *downloadConfig) verifyStoreConnection() error {
+	if err := cfg.store.Ping(); err != nil {
+		cfg.store, err = database.NewDynamoDBClient()
+		if err != nil {
+			slog.Error("Failed to configure the DynamoDB client", "error", err)
+			return err
+		}
+	}
 
-	// Extract headers sent by Google Drive
+	return nil
+}
+
+func (cfg *downloadConfig) verifyDriveContext() error {
+	if cfg.dc == nil {
+		var err error
+		cfg.dc, err = google.NewGoogleDrive(cfg.store)
+		if err != nil {
+			//
+			slog.Error("Failed to initialize the Google Drive service context", "error", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (cfg *downloadConfig) copyDocument(document *types.Document) (string, error) {
+	reader, err := cfg.dc.GetReader(document)
+	if err != nil {
+		slog.Error("Failed to get a reader for the document", "error", err)
+		return "", err
+	}
+
+	defer reader.Close()
+
+	buf := new(bytes.Buffer)
+	size, err := io.Copy(buf, reader)
+	if err != nil {
+		slog.Error("Faield to copy the file from Google Drive", "error", err)
+		return "", err
+	}
+
+	// Upload to S3
+	key := fmt.Sprintf("staging/%s-%d.pdf", document.Name, time.Now().Unix())
+	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:        aws.String(BucketName),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(buf.Bytes()),
+		ContentType:   aws.String("application/pdf"),
+		ContentLength: aws.Int64(size),
+	})
+	if err != nil {
+		slog.Error("Failed to save the document in the S3 bucket", "docName", document.Name, "error", err)
+		return "", err
+	}
+
+	return fmt.Sprintf("s3://%s/%s", BucketName, key), nil
+}
+
+func getRequestFolderID(request events.APIGatewayProxyRequest) (string, error) {
 	resourceState := request.Headers["X-Goog-Resource-State"]
 	channelID := request.Headers["X-Goog-Channel-ID"]
 	resourceID := request.Headers["X-Goog-Resource-ID"]
@@ -45,89 +106,93 @@ func (cfg *downloadConfig) processFileNotification(dc *google.GoogleDriveContext
 	// If we receive a 'sync' notification, ignore it for now.
 	// We could use this for initialzing the state of the vault?
 	if resourceState != "add" {
-		slog.Info("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
-		return util.BuildGatewayResponse("Only interested in new files that are 'add'ed", http.StatusOK, nil)
+		slog.Debug("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
+		return "", fmt.Errorf("invalid file notification")
 	}
 
 	// TODO: query the watch channel based on the channelID and verify the resourceID
-	wc, err := store.GetWatchChannelByChannel(channelID)
+	wc, err := cfg.store.GetWatchChannelByChannel(channelID)
 	if err != nil {
 		message := "Failed to find a registration for the channel"
-
 		slog.Error(message, "channelID", channelID, "error", err)
-		return util.BuildGatewayResponse(message, http.StatusOK, nil)
+		return "", fmt.Errorf("invalid file notification")
+
 	}
 
 	// verify the resourceID
 	if resourceID != wc.ResourceID {
-		message := "ResourceID for the channel is not valid"
-		slog.Error(message, "channelID", channelID, "resourceID", resourceID, "error", err)
-		return util.BuildGatewayResponse(message, http.StatusOK, nil)
+		slog.Error("ResourceID for the channel is not valid", "channelID", channelID, "resourceID", resourceID, "error", err)
+		return "", fmt.Errorf("invalid file notification")
+	}
+
+	return wc.FolderID, nil
+}
+
+func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	slog.Debug(">>processFileNotification")
+	defer slog.Debug("<<processFileNotification")
+
+	if err := cfg.verifyStoreConnection(); err != nil {
+		return util.BuildGatewayResponse("Failed to initialize the connection to the database", http.StatusInternalServerError)
+	}
+
+	if err := cfg.verifyDriveContext(); err != nil {
+		return util.BuildGatewayResponse("Failed to initialize the Google Drive API context", http.StatusInternalServerError)
+	}
+
+	folderID, err := getRequestFolderID(request)
+	if err != nil {
+		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
 	}
 
 	// Check for new or modified files
-	documents, err := dc.QueryFiles(wc.FolderID)
+	documents, err := cfg.dc.QueryFiles(folderID)
 	if err != nil {
 		slog.Error("Call to QueryFiles failed", "error", err)
-		return util.BuildGatewayResponse("Failed to query for new files", http.StatusOK, nil)
+		return util.BuildGatewayResponse("Failed to query for new files", http.StatusOK)
 	}
 
-	s3Client := s3.NewFromConfig(cfg.awsCfg)
-
 	for _, document := range documents {
-		slog.Info("process doc", "doc", document)
 
-		reader, err := dc.GetReader(document)
+		path, err := cfg.copyDocument(document)
 		if err != nil {
-			message := "Failed to get a reader for the document"
-			slog.Error(message, "error", err)
-			return util.BuildGatewayResponse(message, http.StatusOK, nil)
-		}
-
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			message := "Failed to read the document data"
-			slog.Error(message, "docName", document.Name, "error", err)
-			return util.BuildGatewayResponse(message, http.StatusOK, nil)
-		}
-
-		// TODO: use the document.Name?
-		key := fmt.Sprintf("staging/%s.pdf", document.ID)
-
-		// Upload to S3
-		_, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket:      aws.String(cfg.s3Bucket),
-			Key:         aws.String(key),
-			Body:        bytes.NewReader(data),
-			ContentType: aws.String("application/pdf"),
-		})
-		if err != nil {
-			slog.Error("Failed to save the document in the S3 bucket", "docName", document.Name, "error", err)
 			continue
 		}
 
-		// Set the document status
+		// Save metadata in DynamoDB
 		document.Status = "downloaded"
-
-		// TODO: Save metadata in DynamoDB
-		err = store.InsertDocument(*document)
+		err = cfg.store.InsertDocument(*document)
 		if err != nil {
 			slog.Error("Failed to save the document metadata", "docName", document.Name, "error", err)
 			continue
 		}
 
+		input := types.DocumentDownload{
+			DocumentID:   document.ID,
+			DocumentPath: path,
+		}
+
+		inputJSON, err := json.Marshal(input)
+		if err != nil {
+			slog.Error("Failed to serialize the document information for the next step", "error", err)
+			continue
+		}
+
+		_, err = cfg.sfnClient.StartExecution(context.TODO(), &sfn.StartExecutionInput{
+			StateMachineArn: &cfg.stateMachineARN,
+			Input:           aws.String(string(inputJSON)),
+		})
 	}
 
-	return util.BuildGatewayResponse("Processing new file", http.StatusOK, nil)
+	return util.BuildGatewayResponse("Processing new file", http.StatusOK)
 }
 
-func main() {
-	slog.Info(">>downloadLambda.main")
-	defer slog.Info("<<downloadLambda.main")
-
+func init() {
+	slog.Debug(">>downloadLambda.init")
+	defer slog.Debug("<<downloadLambda.init")
 	awsCfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		slog.Error("failed to load the AWS config", "error", err)
+		slog.Error("Failed to load the AWS config", "error", err)
 		os.Exit(1)
 	}
 
@@ -140,32 +205,39 @@ func main() {
 	dc, err := google.NewGoogleDrive(store)
 	if err != nil {
 		//
-		slog.Error("failed to initialize the Google Drive service context", "error", err)
+		slog.Error("Failed to initialize the Google Drive service context", "error", err)
 		os.Exit(1)
 	}
 
 	secretsManager := secretsmanager.NewFromConfig(awsCfg)
 
-	input := &secretsmanager.GetSecretValueInput{SecretId: &S3_BUCKET_NAME}
-	result, err := secretsManager.GetSecretValue(context.TODO(), input)
-	if err != nil {
-		// TODO
+	sfnClient := sfn.NewFromConfig(awsCfg)
+
+	stateMachineARN := os.Getenv("STATE_MACHINE_ARN")
+	if stateMachineARN == "" {
+		slog.Error("Failed to get the state machine ARN", "error", err)
+		os.Exit(1)
 	}
 
-	s3Bucket := *result.SecretString
+	s3Client := s3.NewFromConfig(awsCfg)
 
-	cfg := &downloadConfig{
+	cfg = &downloadConfig{
 		store,
 		dc,
 		secretsManager,
+		awsCfg,
+		sfnClient,
+		stateMachineARN,
+		s3Client,
+	}
 
-		s3Bucket,
-		awsCfg}
+}
+
+func main() {
+	slog.Debug(">>downloadLambda.main")
+	defer slog.Debug("<<downloadLambda.main")
 
 	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-		slog.Info(">>downloadLambda.lambda")
-		defer slog.Info("<<downloadLambda.lambda")
-
-		return cfg.processFileNotification(dc, store, request)
+		return cfg.processFileNotification(request)
 	})
 }

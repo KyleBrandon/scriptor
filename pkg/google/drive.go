@@ -112,7 +112,6 @@ func (gd *GoogleDriveContext) QueryFiles(folderID string) ([]*types.Document, er
 
 	documents := make([]*types.Document, 0, len(fileList.Files))
 	for _, file := range fileList.Files {
-		slog.Info("Found File:", "fileName", file.Name, "driveID", file.DriveId, "fileID", file.Id, "createdTime", file.CreatedTime, "modifiedTime", file.ModifiedTime)
 
 		createdTime, err := time.Parse(time.RFC3339, file.CreatedTime)
 		if err != nil {
@@ -153,8 +152,8 @@ func (gd *GoogleDriveContext) GetReader(document *types.Document) (io.ReadCloser
 }
 
 func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {
-	slog.Info(">>ReRegisterWebhook")
-	defer slog.Info("<<ReRegisterWebhook")
+	slog.Debug(">>ReRegisterWebhook")
+	defer slog.Debug("<<ReRegisterWebhook")
 
 	// get all the channels that we're currently watching
 	watchChannels, err := gd.store.GetWatchChannels()
@@ -195,8 +194,8 @@ func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {
 }
 
 func (gd *GoogleDriveContext) createWatchChannel(wc types.WatchChannel, url string) error {
-	slog.Info(">>createWatchChannel")
-	defer slog.Info("<<createWatchChannel")
+	slog.Debug(">>createWatchChannel")
+	defer slog.Debug("<<createWatchChannel")
 
 	wc.ChannelID = uuid.New().String()
 	wc.ExpiresAt = time.Now().Add(48 * time.Hour).UnixMilli()
