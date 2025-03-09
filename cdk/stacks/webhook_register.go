@@ -15,7 +15,7 @@ func (cfg *CdkScriptorConfig) NewWebHookRegisterStack(id string) awscdk.Stack {
 
 	myFunction := awslambda.NewFunction(stack, jsii.String("scriptorWebhookRegisterLambda"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2023(),
-		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/webhook_register_lambda.zip"), nil),
+		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/webhook_register.zip"), nil),
 		Handler: jsii.String("main"),
 		Environment: &map[string]*string{
 			"WEBHOOK_URL": jsii.String(cfg.WebhookURL),

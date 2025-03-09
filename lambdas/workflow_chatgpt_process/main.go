@@ -50,9 +50,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentProce
 	slog.Info("Read file from S3 Bucket")
 	ret.DocumentProcessInput = event
 
-	for _, d := range ret.Documents {
-		d.MathpixDocumentPath = "abc"
-	}
+	ret.Document.ChatGptDocumentPath = "123"
 
 	slog.Info("chatgptLambda process output", "docs", ret)
 

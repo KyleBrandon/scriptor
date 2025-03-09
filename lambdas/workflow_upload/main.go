@@ -50,9 +50,8 @@ func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentProces
 	slog.Info("Read file from S3 Bucket")
 	ret.DocumentProcessInput = event
 
-	for _, d := range ret.Documents {
-		d.MathpixDocumentPath = "abc"
-	}
+	ret.Document.MathpixDocumentPath = ""
+	ret.Document.ChatGptDocumentPath = ""
 
 	slog.Info("uploadLambda process output", "docs", ret)
 

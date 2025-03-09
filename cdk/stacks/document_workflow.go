@@ -14,15 +14,15 @@ import (
 func (cfg *CdkScriptorConfig) NewDocumentWorkflowStack(id string) awscdk.Stack {
 	stack := awscdk.NewStack(cfg.App, &id, &cfg.Props.StackProps)
 
-	stateMachineArn := cfg.configureStateMachine(stack)
+	stateMachine := cfg.configureStateMachine(stack)
 
 	// configure the download lambda and pass it the state machine ARN so it can start things off
-	_ = cfg.configureDownloadLambda(stack, stateMachineArn)
+	_ = cfg.configureDownloadLambda(stack, stateMachine)
 
 	return stack
 }
 
-func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack, stateMachineArn string) awslambda.Function {
+func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack, stateMachine awsstepfunctions.StateMachine) awslambda.Function {
 
 	// Define Lambda functions for workflow steps
 	downloadLambda := awslambda.NewFunction(stack, jsii.String("scriptorDownloadLambda"), &awslambda.FunctionProps{
@@ -31,9 +31,12 @@ func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack, stateM
 		Handler: jsii.String("main"),
 		Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
 		Environment: &map[string]*string{
-			"STATE_MACHINE_ARN": jsii.String(stateMachineArn),
+			"STATE_MACHINE_ARN": jsii.String(*stateMachine.StateMachineArn()),
 		},
 	})
+
+	// grant the lambda permission to start the state machine
+	stateMachine.GrantStartExecution(downloadLambda)
 
 	// grant lambda permissions to read the secrets
 	cfg.GoogleServiceKeySecret.GrantRead(downloadLambda, nil)
@@ -76,7 +79,7 @@ func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack, stateM
 
 }
 
-func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) string {
+func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) awsstepfunctions.StateMachine {
 	mathpixProcessLambda := awslambda.NewFunction(stack, jsii.String("scriptorMathpixProcess"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2(),
 		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/workflow_mathpix_process.zip"), nil),
@@ -130,5 +133,5 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) string {
 		Timeout:    awscdk.Duration_Minutes(jsii.Number(15)), // Workflow timeout
 	})
 
-	return *stateMachine.StateMachineArn()
+	return stateMachine
 }

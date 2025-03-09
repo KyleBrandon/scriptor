@@ -106,7 +106,7 @@ func getRequestFolderID(request events.APIGatewayProxyRequest) (string, error) {
 	// If we receive a 'sync' notification, ignore it for now.
 	// We could use this for initialzing the state of the vault?
 	if resourceState != "add" {
-		slog.Debug("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
+		slog.Info("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
 		return "", fmt.Errorf("invalid file notification")
 	}
 
@@ -129,8 +129,8 @@ func getRequestFolderID(request events.APIGatewayProxyRequest) (string, error) {
 }
 
 func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	slog.Debug(">>processFileNotification")
-	defer slog.Debug("<<processFileNotification")
+	slog.Info(">>processFileNotification")
+	defer slog.Info("<<processFileNotification")
 
 	if err := cfg.verifyStoreConnection(); err != nil {
 		return util.BuildGatewayResponse("Failed to initialize the connection to the database", http.StatusInternalServerError)
@@ -167,9 +167,13 @@ func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProx
 			continue
 		}
 
-		input := types.DocumentDownload{
+		d := types.DocumentDownload{
 			DocumentID:   document.ID,
 			DocumentPath: path,
+		}
+
+		input := types.DocumentProcessInput{
+			Document: d,
 		}
 
 		inputJSON, err := json.Marshal(input)
@@ -178,18 +182,24 @@ func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProx
 			continue
 		}
 
-		_, err = cfg.sfnClient.StartExecution(context.TODO(), &sfn.StartExecutionInput{
+		execOutput, err := cfg.sfnClient.StartExecution(context.TODO(), &sfn.StartExecutionInput{
 			StateMachineArn: &cfg.stateMachineARN,
 			Input:           aws.String(string(inputJSON)),
 		})
+		if err != nil {
+			slog.Error("Failed to start the state machine execution", "error", err)
+			return util.BuildGatewayResponse("Failed to start the state machine execution", http.StatusInternalServerError)
+		}
+
+		slog.Info("Step Function start successfully", "execARN", *execOutput.ExecutionArn)
 	}
 
 	return util.BuildGatewayResponse("Processing new file", http.StatusOK)
 }
 
 func init() {
-	slog.Debug(">>downloadLambda.init")
-	defer slog.Debug("<<downloadLambda.init")
+	slog.Info(">>downloadLambda.init")
+	defer slog.Info("<<downloadLambda.init")
 	awsCfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		slog.Error("Failed to load the AWS config", "error", err)
@@ -234,8 +244,8 @@ func init() {
 }
 
 func main() {
-	slog.Debug(">>downloadLambda.main")
-	defer slog.Debug("<<downloadLambda.main")
+	slog.Info(">>downloadLambda.main")
+	defer slog.Info("<<downloadLambda.main")
 
 	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 		return cfg.processFileNotification(request)

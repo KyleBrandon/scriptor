@@ -52,7 +52,7 @@ type (
 
 	// Output for the DownloadLambda
 	DocumentProcessInput struct {
-		Documents []DocumentDownload `json:"documents"`
+		Document DocumentDownload `json:"document"`
 	}
 
 	DocumentProcessOutput struct {

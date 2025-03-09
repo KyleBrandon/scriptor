@@ -1,31 +1,40 @@
-lambdas: reregister_webhook_lambda workflow_download workflow_mathpix_process workflow_chatgpt_process workflow_upload 
+# Define Lambda names
+LAMBDA_NAMES = \
+	webhook_register \
+	workflow_download \
+	workflow_mathpix_process \
+	workflow_chatgpt_process \
+	workflow_upload
 
-reregister_webhook_lambda:
-	@GOOS=linux GOARCH=amd64 go build -o ./bin/bootstrap ./lambdas/webhook_register
-	@(cd bin && zip webhook_register_lambda.zip bootstrap)
+# Directories
+BIN_DIR = ./bin
+LAMBDA_DIR = ./lambdas
 
-workflow_download:
-	@GOOS=linux GOARCH=amd64 go build -o ./bin/bootstrap ./lambdas/workflow_download
-	@(cd bin && zip workflow_download.zip bootstrap)
-	
-workflow_mathpix_process:
-	@GOOS=linux GOARCH=amd64 go build -o ./bin/bootstrap ./lambdas/workflow_mathpix_process
-	@(cd bin && zip workflow_mathpix_process.zip bootstrap)
+# Define the output zip files for each Lambda
+LAMBDA_ZIPS = $(patsubst %, $(BIN_DIR)/%.zip, $(LAMBDA_NAMES))
 
-workflow_chatgpt_process:
-	@GOOS=linux GOARCH=amd64 go build -o ./bin/bootstrap ./lambdas/workflow_chatgpt_process
-	@(cd bin && zip workflow_chatgpt_process.zip bootstrap)
+# Default target: Build all lambdas
+all: lambdas
 
-workflow_upload:
-	@GOOS=linux GOARCH=amd64 go build -o ./bin/bootstrap ./lambdas/workflow_upload
-	@(cd bin && zip workflow_upload.zip bootstrap)
+# Build all lambdas only if needed
+lambdas: $(LAMBDA_ZIPS)
 
+# Pattern rule for building each Lambda
+$(BIN_DIR)/%.zip: $(LAMBDA_DIR)/%/*.go
+	@echo " Building Lambda: $*"
+	@GOOS=linux GOARCH=amd64 go build -o $(BIN_DIR)/bootstrap $(LAMBDA_DIR)/$*
+	@(cd $(BIN_DIR) && zip $*.zip bootstrap)
+	@rm $(BIN_DIR)/bootstrap
 
+# CDK operations
 cdk-diff: lambdas
 	@(cd cdk && cdk diff)
 
 cdk-deploy: cdk-diff
 	@(cd cdk && cdk deploy --all)
 
+# Clean generated files
 clean:
-	@rm ./bin/*
+	@rm -f $(BIN_DIR)/*.zip
+
+
