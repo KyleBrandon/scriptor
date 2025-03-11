@@ -4,24 +4,65 @@ import (
 	"time"
 )
 
-const GOOGLE_SERVICE_KEY_SECRET = "GoogleServiceKey"
-const DEFAULT_GOOGLE_FOLDER_LOCATIONS_SECRET = "DefaultGoogleFolderLocations"
-const S3_BUCKET_NAME = "scriptor-documents"
+const (
+	//
+	// Secret Manager Names
+	//
+
+	// Google service secret for using the Google Drive API
+	GOOGLE_SERVICE_SECRETS = "scriptor/google-service"
+
+	// Mathpix secrets for using the Mathpix API
+	MATHPIX_SECRETS = "scriptor/mathpix"
+
+	// Google Drive folder identifiers for default monitoring
+	GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS = "scriptor/google-folder-defaults"
+
+	// S3 bucket to store staging and final converted files
+	S3_BUCKET_NAME = "scriptor-documents"
+
+	//
+	// Document stage values
+	//
+
+	// Document downloaded to S3
+	DOCUMENT_STAGE_DOWNLOADED = "downloaded"
+
+	// Document stage Mathpix
+	DOCUMENT_STAGE_MATHPIX = "mathpix"
+
+	// Document stage ChatGPT
+	DOCUMENT_STAGE_CHATGPT = "chatgpt"
+
+	// Document stage uploaded
+	DOCUMENT_STAGE_UPLOADED = "uploaded"
+
+	//
+	// Document status values
+	//
+
+	DOCUMENT_STATUS_PENDING    = "pending"
+	DOCUMENT_STATUS_INPROGRESS = "in-progress"
+	DOCUMENT_STATUS_COMPLETE   = "complete"
+	DOCUMENT_STATUS_ERROR      = "error"
+
+	// Document in error
+	DOCUMENT_ERROR = "document-error"
+)
 
 type (
-	DefaultGoogleFolderLocations struct {
-		FolderID        string `json:"FolderID"`
-		ArchiveFolderID string `json:"ArchiveFolderID"`
-		DestFolderID    string `json:"DestFolderID"`
+	// Default locations for where to monitor for folders and where to place
+	// converted documents.
+	GoogleFolderDefaultLocations struct {
+		FolderID        string `json:"folder_id"`
+		ArchiveFolderID string `json:"archive_folder_id"`
+		DestFolderID    string `json:"destination_folder_id"`
 	}
 
-	Document struct {
-		ID           string    `dynamodbav:"id"`
-		FolderID     string    `dynamodbav:"folder_id"`
-		Name         string    `dynamodbav:"name"`
-		Status       string    `dynamodbav:"status"`
-		CreatedTime  time.Time `dynamodbav:"created_time"`
-		ModifiedTime time.Time `dynamodbav:"modified_time"`
+	// Mathpix application ID and Key.
+	MathpixSecrets struct {
+		AppID  string `json:"mathpix_app_id"`
+		AppKey string `json:"mathpix_app_key"`
 	}
 
 	// WatchChannel represents a folder location to watch for new files to process.
@@ -42,20 +83,31 @@ type (
 		WebhookUrl          string    `dynamodbav:"webhook_url"`
 	}
 
-	// DocumentDownload represents a document
-	DocumentDownload struct {
-		DocumentID          string `json:"document_id"`
-		DocumentPath        string `json:"document_path"`
-		MathpixDocumentPath string `json:"mathpix_document_path"`
-		ChatGptDocumentPath string `json:"chatgpt_document_path"`
+	// Document state as it is being converted.
+	Document struct {
+		// ID is the partition key for the documents table
+		ID             string    `dynamodbav:"id"`
+		GoogleID       string    `dynamodbav:"google_id"`
+		GoogleFolderID string    `dynamodbav:"folder_id"`
+		Name           string    `dynamodbav:"name"`
+		Size           int64     `dynamodbav:"size"`
+		CreatedTime    time.Time `dynamodbav:"created_time"`
+		ModifiedTime   time.Time `dynamodbav:"modified_time"`
 	}
 
-	// Output for the DownloadLambda
-	DocumentProcessInput struct {
-		Document DocumentDownload `json:"document"`
+	// DocumentProcessingStage tracks the document through each stage of processing.
+	DocumentProcessingStage struct {
+		ID          string    `dynamodbav:"id"`
+		Stage       string    `dynamodbav:"stage"`
+		CreatedAt   time.Time `dynamodbav:"created_at"`
+		S3Key       string    `dynamodbav:"s3key"`
+		StageStatus string    `dynamodbav:"stage_status"`
+		Metadata    string    `dynamodbav:"metadata"`
 	}
 
-	DocumentProcessOutput struct {
-		DocumentProcessInput
+	DocumentStep struct {
+		ID           string `json:"id"`
+		Stage        string `json:"stage"`
+		DocumentName string `json:"document_name"`
 	}
 )

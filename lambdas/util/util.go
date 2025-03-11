@@ -1,6 +1,10 @@
 package util
 
 import (
+	"encoding/json"
+	"log/slog"
+
+	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -9,4 +13,21 @@ func BuildGatewayResponse(message string, statusCode int) (events.APIGatewayProx
 		Body:       message,
 		StatusCode: statusCode,
 	}, nil
+}
+
+func BuildStageInput(id, stage, name string) (string, error) {
+	// Start the state machine with the document id and stage
+	input := types.DocumentStep{
+		ID:           id,
+		Stage:        stage,
+		DocumentName: name,
+	}
+
+	inputJSON, err := json.Marshal(input)
+	if err != nil {
+		slog.Error("Failed to serialize the document information for the next step", "error", err)
+		return "", err
+	}
+
+	return string(inputJSON), nil
 }

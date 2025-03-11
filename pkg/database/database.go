@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	WATCH_CHANNEL_TABLE_NAME = "WatchChannelTable"
-	DOCUMENT_TABLE_NAME      = "DocumentsTable"
+	WATCH_CHANNEL_TABLE             = "WatchChannels"
+	DOCUMENT_TABLE                  = "Documents"
+	DOCUMENT_PROCESSING_STAGE_TABLE = "DocumentProcessingStage"
 )
 
 type WatchChannelStore interface {
@@ -27,6 +28,9 @@ type WatchChannelStore interface {
 	UpdateWatchChannel(watchChannel stypes.WatchChannel) error
 	GetWatchChannelByChannel(folderID string) (stypes.WatchChannel, error)
 	InsertDocument(document stypes.Document) error
+	InsertDocumentStage(stage stypes.DocumentProcessingStage) error
+	UpdateDocumentStage(stage stypes.DocumentProcessingStage) error
+	GetDocumentStage(id, stage string) (stypes.DocumentProcessingStage, error)
 }
 
 type DynamoDBClient struct {
@@ -63,7 +67,7 @@ func (u DynamoDBClient) InsertDocument(document stypes.Document) error {
 	}
 
 	item := &dynamodb.PutItemInput{
-		TableName: aws.String(DOCUMENT_TABLE_NAME),
+		TableName: aws.String(DOCUMENT_TABLE),
 		Item:      av,
 	}
 
@@ -77,9 +81,98 @@ func (u DynamoDBClient) InsertDocument(document stypes.Document) error {
 
 }
 
+func (u DynamoDBClient) GetDocumentStage(id, stage string) (stypes.DocumentProcessingStage, error) {
+	ret := stypes.DocumentProcessingStage{}
+
+	key := map[string]types.AttributeValue{
+		"id":    &types.AttributeValueMemberS{Value: id},
+		"stage": &types.AttributeValueMemberS{Value: stage},
+	}
+
+	item := &dynamodb.GetItemInput{
+		TableName: aws.String(DOCUMENT_PROCESSING_STAGE_TABLE),
+		Key:       key,
+	}
+
+	result, err := u.store.GetItem(context.TODO(), item)
+	if err != nil {
+		slog.Error("Failed to find the document processing stage", "id", id, "stage", stage, "error", err)
+		return ret, err
+	}
+
+	// Convert DynamoDB result into a slice of WatchChannels
+	var documentStage stypes.DocumentProcessingStage
+	err = attributevalue.UnmarshalMap(result.Item, &documentStage)
+	if err != nil {
+		slog.Error("Failed to unmarshal the document processing stage", "error", err)
+		return ret, err
+	}
+
+	return documentStage, nil
+}
+
+func (u DynamoDBClient) InsertDocumentStage(stage stypes.DocumentProcessingStage) error {
+
+	stage.CreatedAt = time.Now().UTC()
+
+	av, err := attributevalue.MarshalMap(stage)
+	if err != nil {
+		slog.Error("Failed to marshal the document stage", "error", err)
+		return err
+	}
+
+	item := &dynamodb.PutItemInput{
+		TableName: aws.String(DOCUMENT_PROCESSING_STAGE_TABLE),
+		Item:      av,
+	}
+
+	_, err = u.store.PutItem(context.TODO(), item)
+	if err != nil {
+		slog.Error("Failed to insert the document stage", "error", err)
+		return err
+	}
+
+	return nil
+
+}
+
+func (u DynamoDBClient) UpdateDocumentStage(stage stypes.DocumentProcessingStage) error {
+
+	stage.CreatedAt = time.Now().UTC()
+
+	key := map[string]types.AttributeValue{
+		"id":    &types.AttributeValueMemberS{Value: stage.ID},
+		"stage": &types.AttributeValueMemberS{Value: stage.Stage},
+	}
+
+	av, err := attributevalue.MarshalMap(stage)
+	if err != nil {
+		slog.Error("Failed to marshal the document stage", "error", err)
+		return err
+	}
+
+	updateExpression, expressionAttributeValues := buildUpdateExpression(av, []string{"id", "stage"})
+
+	input := &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(DOCUMENT_PROCESSING_STAGE_TABLE),
+		Key:                       key,
+		UpdateExpression:          aws.String(updateExpression),
+		ExpressionAttributeValues: expressionAttributeValues,
+		ReturnValues:              types.ReturnValueUpdatedNew,
+	}
+
+	_, err = u.store.UpdateItem(context.TODO(), input)
+	if err != nil {
+		slog.Error("Failed to update the document processing stage", "error", err)
+		return err
+	}
+
+	return nil
+}
+
 func (u DynamoDBClient) GetWatchChannels() ([]stypes.WatchChannel, error) {
 	scanInput := &dynamodb.ScanInput{
-		TableName: aws.String(WATCH_CHANNEL_TABLE_NAME),
+		TableName: aws.String(WATCH_CHANNEL_TABLE),
 	}
 
 	// Execute Scan
@@ -111,7 +204,7 @@ func (u DynamoDBClient) InsertWatchChannel(watchChannel stypes.WatchChannel) err
 
 	// Create DynamoDB Table
 	item := &dynamodb.PutItemInput{
-		TableName: aws.String(WATCH_CHANNEL_TABLE_NAME),
+		TableName: aws.String(WATCH_CHANNEL_TABLE),
 		Item:      av,
 	}
 
@@ -138,11 +231,12 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) err
 		slog.Error("Failed to marshal the document", "error", err)
 		return err
 	}
+
 	updateExpression, expressionAttributeValues := buildUpdateExpression(av, []string{"folder_id"})
 
 	// Build the update input
 	input := &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(WATCH_CHANNEL_TABLE_NAME),
+		TableName:                 aws.String(WATCH_CHANNEL_TABLE),
 		Key:                       key,
 		UpdateExpression:          aws.String(updateExpression),
 		ExpressionAttributeValues: expressionAttributeValues,
@@ -159,33 +253,11 @@ func (u DynamoDBClient) UpdateWatchChannel(watchChannel stypes.WatchChannel) err
 	return nil
 }
 
-func buildUpdateExpression(input map[string]types.AttributeValue, excludeKeys []string) (string, map[string]types.AttributeValue) {
-	updateExpr := "SET "
-	exprValues := map[string]types.AttributeValue{}
-	i := 0
-
-	for key, value := range input {
-		// skip the keys
-		if slices.Contains(excludeKeys, key) {
-			continue
-		}
-
-		placeholder := fmt.Sprintf(":val%d", i)
-		updateExpr += fmt.Sprintf("%s = %s, ", key, placeholder)
-		exprValues[placeholder] = value
-		i++
-	}
-
-	// remove trailing comma and space
-	updateExpr = updateExpr[:len(updateExpr)-2]
-	return updateExpr, exprValues
-}
-
 func (u DynamoDBClient) GetWatchChannelByChannel(channelID string) (stypes.WatchChannel, error) {
 	var wc stypes.WatchChannel
 
 	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(WATCH_CHANNEL_TABLE_NAME),
+		TableName:              aws.String(WATCH_CHANNEL_TABLE),
 		IndexName:              aws.String("ChannelIDIndex"),
 		KeyConditionExpression: aws.String("channel_id = :channelID"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
@@ -209,4 +281,26 @@ func (u DynamoDBClient) GetWatchChannelByChannel(channelID string) (stypes.Watch
 	}
 
 	return wcs[0], nil
+}
+
+func buildUpdateExpression(input map[string]types.AttributeValue, excludeKeys []string) (string, map[string]types.AttributeValue) {
+	updateExpr := "SET "
+	exprValues := map[string]types.AttributeValue{}
+	i := 0
+
+	for key, value := range input {
+		// skip the keys
+		if slices.Contains(excludeKeys, key) {
+			continue
+		}
+
+		placeholder := fmt.Sprintf(":val%d", i)
+		updateExpr += fmt.Sprintf("%s = %s, ", key, placeholder)
+		exprValues[placeholder] = value
+		i++
+	}
+
+	// remove trailing comma and space
+	updateExpr = updateExpr[:len(updateExpr)-2]
+	return updateExpr, exprValues
 }

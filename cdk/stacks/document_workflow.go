@@ -44,6 +44,9 @@ func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack, stateM
 	// grant the lambda r/w permissions to the document table
 	cfg.documentTable.GrantReadWriteData(downloadLambda)
 
+	// grant the lambda r/w permissions to the document table
+	cfg.documentProcessingStageTable.GrantReadWriteData(downloadLambda)
+
 	// grant the lambda read permissions to the watch channel table
 	cfg.watchChannelTable.GrantReadData(downloadLambda)
 
@@ -79,40 +82,79 @@ func (cfg *CdkScriptorConfig) configureDownloadLambda(stack awscdk.Stack, stateM
 
 }
 
-func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) awsstepfunctions.StateMachine {
-	mathpixProcessLambda := awslambda.NewFunction(stack, jsii.String("scriptorMathpixProcess"), &awslambda.FunctionProps{
+func (cfg *CdkScriptorConfig) configureMathpixLambda(stack awscdk.Stack) awslambda.Function {
+	mathpixLambda := awslambda.NewFunction(stack, jsii.String("scriptorMathpixProcess"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2(),
 		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/workflow_mathpix_process.zip"), nil),
 		Handler: jsii.String("main"),
 		Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
 	})
+	// grant the lambda read/write permissions to the S3 staging bucket
+	cfg.documentBucket.GrantReadWrite(mathpixLambda, nil)
+	// grant the lambda r/w permissions to the document table
+	cfg.documentTable.GrantReadWriteData(mathpixLambda)
+	// grant the lambda r/w permissions to the document table
+	cfg.documentProcessingStageTable.GrantReadWriteData(mathpixLambda)
 
-	chatgptProcessLambda := awslambda.NewFunction(stack, jsii.String("scriptorChatGPTProcess"), &awslambda.FunctionProps{
+	// grant lambda permissions to read the secrets
+	cfg.MathpixSecrets.GrantRead(mathpixLambda, nil)
+
+	return mathpixLambda
+}
+
+func (cfg *CdkScriptorConfig) configureChatgptLambda(stack awscdk.Stack) awslambda.Function {
+	chatgptLambda := awslambda.NewFunction(stack, jsii.String("scriptorChatGPTProcess"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2(),
 		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/workflow_chatgpt_process.zip"), nil),
 		Handler: jsii.String("main"),
 		Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
 	})
+	// grant the lambda read/write permissions to the S3 staging bucket
+	cfg.documentBucket.GrantReadWrite(chatgptLambda, nil)
+	// grant the lambda r/w permissions to the document table
+	cfg.documentTable.GrantReadWriteData(chatgptLambda)
+	// grant the lambda r/w permissions to the document table
+	cfg.documentProcessingStageTable.GrantReadWriteData(chatgptLambda)
 
+	return chatgptLambda
+}
+
+func (cfg *CdkScriptorConfig) configureUploadLambda(stack awscdk.Stack) awslambda.Function {
 	uploadLambda := awslambda.NewFunction(stack, jsii.String("scriptorUploadLambda"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_PROVIDED_AL2(),
 		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/workflow_upload.zip"), nil),
 		Handler: jsii.String("main"),
 		Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
 	})
+	// grant the lambda read/write permissions to the S3 staging bucket
+	cfg.documentBucket.GrantReadWrite(uploadLambda, nil)
+	// grant the lambda r/w permissions to the document table
+	cfg.documentTable.GrantReadWriteData(uploadLambda)
+	// grant the lambda r/w permissions to the document table
+	cfg.documentProcessingStageTable.GrantReadWriteData(uploadLambda)
+	// grant lambda permissions to read the secrets
+	cfg.GoogleServiceKeySecret.GrantRead(uploadLambda, nil)
+
+	return uploadLambda
+}
+
+func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) awsstepfunctions.StateMachine {
+	mathpixLambda := cfg.configureMathpixLambda(stack)
+	chatgptLambda := cfg.configureChatgptLambda(stack)
+	uploadLambda := cfg.configureUploadLambda(stack)
 
 	taskTimeout := awsstepfunctions.Timeout_Duration(awscdk.Duration_Minutes(jsii.Number(3)))
 
 	// 🔹 Step 1: Task - Send to MathPix
 	mathpixTask := awsstepfunctionstasks.NewLambdaInvoke(stack, jsii.String("MathpixTask"), &awsstepfunctionstasks.LambdaInvokeProps{
-		LambdaFunction: mathpixProcessLambda,
+		LambdaFunction: mathpixLambda,
 		TaskTimeout:    taskTimeout,
 		OutputPath:     jsii.String("$.Payload"),
 	})
 
 	// 🔹 Step 2: Task - Send to ChatGPT
 	chatgptTask := awsstepfunctionstasks.NewLambdaInvoke(stack, jsii.String("ChatGPTTask"), &awsstepfunctionstasks.LambdaInvokeProps{
-		LambdaFunction: chatgptProcessLambda,
+		LambdaFunction: chatgptLambda,
 		TaskTimeout:    taskTimeout,
 		OutputPath:     jsii.String("$.Payload"),
 	})

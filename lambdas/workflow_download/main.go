@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,16 +17,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 )
 
 type downloadConfig struct {
 	store           database.WatchChannelStore
 	dc              *google.GoogleDriveContext
-	secretsManager  *secretsmanager.Client
 	awsCfg          aws.Config
-	sfnClient       *sfn.Client
 	stateMachineARN string
 	s3Client        *s3.Client
 }
@@ -74,28 +68,21 @@ func (cfg *downloadConfig) copyDocument(document *types.Document) (string, error
 
 	defer reader.Close()
 
-	buf := new(bytes.Buffer)
-	size, err := io.Copy(buf, reader)
-	if err != nil {
-		slog.Error("Faield to copy the file from Google Drive", "error", err)
-		return "", err
-	}
-
 	// Upload to S3
 	key := fmt.Sprintf("staging/%s-%d.pdf", document.Name, time.Now().Unix())
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
 		Key:           aws.String(key),
-		Body:          bytes.NewReader(buf.Bytes()),
+		Body:          reader,
 		ContentType:   aws.String("application/pdf"),
-		ContentLength: aws.Int64(size),
+		ContentLength: aws.Int64(document.Size),
 	})
 	if err != nil {
 		slog.Error("Failed to save the document in the S3 bucket", "docName", document.Name, "error", err)
 		return "", err
 	}
 
-	return fmt.Sprintf("s3://%s/%s", BucketName, key), nil
+	return key, nil
 }
 
 func getRequestFolderID(request events.APIGatewayProxyRequest) (string, error) {
@@ -106,15 +93,14 @@ func getRequestFolderID(request events.APIGatewayProxyRequest) (string, error) {
 	// If we receive a 'sync' notification, ignore it for now.
 	// We could use this for initialzing the state of the vault?
 	if resourceState != "add" {
-		slog.Info("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
+		slog.Debug("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
 		return "", fmt.Errorf("invalid file notification")
 	}
 
-	// TODO: query the watch channel based on the channelID and verify the resourceID
+	// query the watch channel based on the channelID
 	wc, err := cfg.store.GetWatchChannelByChannel(channelID)
 	if err != nil {
-		message := "Failed to find a registration for the channel"
-		slog.Error(message, "channelID", channelID, "error", err)
+		slog.Error("Failed to find a registration for the channel", "channelID", channelID, "error", err)
 		return "", fmt.Errorf("invalid file notification")
 
 	}
@@ -129,8 +115,8 @@ func getRequestFolderID(request events.APIGatewayProxyRequest) (string, error) {
 }
 
 func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	slog.Info(">>processFileNotification")
-	defer slog.Info("<<processFileNotification")
+	slog.Debug(">>processFileNotification")
+	defer slog.Debug("<<processFileNotification")
 
 	if err := cfg.verifyStoreConnection(); err != nil {
 		return util.BuildGatewayResponse("Failed to initialize the connection to the database", http.StatusInternalServerError)
@@ -145,6 +131,9 @@ func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProx
 		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
 	}
 
+	// get the step function client
+	sfnClient := sfn.NewFromConfig(cfg.awsCfg)
+
 	// Check for new or modified files
 	documents, err := cfg.dc.QueryFiles(folderID)
 	if err != nil {
@@ -152,46 +141,60 @@ func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProx
 		return util.BuildGatewayResponse("Failed to query for new files", http.StatusOK)
 	}
 
+	// loop through the documents that have been uploaded
 	for _, document := range documents {
 
-		path, err := cfg.copyDocument(document)
-		if err != nil {
-			continue
-		}
-
-		// Save metadata in DynamoDB
-		document.Status = "downloaded"
+		// Save the Google Drive document information
 		err = cfg.store.InsertDocument(*document)
 		if err != nil {
 			slog.Error("Failed to save the document metadata", "docName", document.Name, "error", err)
 			continue
 		}
 
-		d := types.DocumentDownload{
-			DocumentID:   document.ID,
-			DocumentPath: path,
+		// Update the 'download' processing stage to in-progress
+		stage := types.DocumentProcessingStage{
+			ID:          document.ID,
+			Stage:       types.DOCUMENT_STAGE_DOWNLOADED,
+			StageStatus: types.DOCUMENT_STATUS_INPROGRESS,
 		}
 
-		input := types.DocumentProcessInput{
-			Document: d,
-		}
-
-		inputJSON, err := json.Marshal(input)
+		err = cfg.store.InsertDocumentStage(stage)
 		if err != nil {
-			slog.Error("Failed to serialize the document information for the next step", "error", err)
+			slog.Error("Failed to save the document processing stage", "error", err)
 			continue
 		}
 
-		execOutput, err := cfg.sfnClient.StartExecution(context.TODO(), &sfn.StartExecutionInput{
+		// copy the original document to S3
+		path, err := cfg.copyDocument(document)
+		if err != nil {
+			continue
+		}
+
+		// Update the stage to complete
+		stage.S3Key = path
+		stage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
+
+		err = cfg.store.UpdateDocumentStage(stage)
+		if err != nil {
+			slog.Error("Failed to update the processing stage as complete", "error", err)
+			continue
+		}
+
+		input, err := util.BuildStageInput(document.ID, types.DOCUMENT_STAGE_DOWNLOADED, document.Name)
+		if err != nil {
+			slog.Error("Failed to build the stage input for the next stage", "error", err)
+			return util.BuildGatewayResponse("Failed to build the input for the state machine", http.StatusInternalServerError)
+		}
+
+		_, err = sfnClient.StartExecution(context.TODO(), &sfn.StartExecutionInput{
 			StateMachineArn: &cfg.stateMachineARN,
-			Input:           aws.String(string(inputJSON)),
+			Input:           aws.String(input),
 		})
+
 		if err != nil {
 			slog.Error("Failed to start the state machine execution", "error", err)
 			return util.BuildGatewayResponse("Failed to start the state machine execution", http.StatusInternalServerError)
 		}
-
-		slog.Info("Step Function start successfully", "execARN", *execOutput.ExecutionArn)
 	}
 
 	return util.BuildGatewayResponse("Processing new file", http.StatusOK)
@@ -200,6 +203,7 @@ func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProx
 func init() {
 	slog.Info(">>downloadLambda.init")
 	defer slog.Info("<<downloadLambda.init")
+
 	awsCfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		slog.Error("Failed to load the AWS config", "error", err)
@@ -219,10 +223,6 @@ func init() {
 		os.Exit(1)
 	}
 
-	secretsManager := secretsmanager.NewFromConfig(awsCfg)
-
-	sfnClient := sfn.NewFromConfig(awsCfg)
-
 	stateMachineARN := os.Getenv("STATE_MACHINE_ARN")
 	if stateMachineARN == "" {
 		slog.Error("Failed to get the state machine ARN", "error", err)
@@ -234,9 +234,7 @@ func init() {
 	cfg = &downloadConfig{
 		store,
 		dc,
-		secretsManager,
 		awsCfg,
-		sfnClient,
 		stateMachineARN,
 		s3Client,
 	}

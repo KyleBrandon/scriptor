@@ -18,11 +18,13 @@ type CdkScriptorConfig struct {
 	Props      *CdkStackProps
 	WebhookURL string
 
-	GoogleServiceKeySecret awssecretsmanager.ISecret
-	DefaultFoldersSecret   awssecretsmanager.ISecret
-	watchChannelTable      awsdynamodb.Table
-	documentTable          awsdynamodb.Table
-	documentBucket         awss3.Bucket
+	GoogleServiceKeySecret       awssecretsmanager.ISecret
+	DefaultFoldersSecret         awssecretsmanager.ISecret
+	MathpixSecrets               awssecretsmanager.ISecret
+	watchChannelTable            awsdynamodb.Table
+	documentTable                awsdynamodb.Table
+	documentProcessingStageTable awsdynamodb.Table
+	documentBucket               awss3.Bucket
 }
 
 func NewCdkScriptorConfig() *CdkScriptorConfig {

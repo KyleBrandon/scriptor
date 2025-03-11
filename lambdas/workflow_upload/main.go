@@ -34,13 +34,13 @@ func (cfg *uploadConfig) verifyStoreConnection() error {
 	return nil
 }
 
-func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentProcessInput) (types.DocumentProcessOutput, error) {
+func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
 	slog.Info(">>uploadLambda.process")
 	defer slog.Info("<<uploadLambda.process")
 
 	slog.Info("uploadLambda process input", "input", event)
 
-	ret := types.DocumentProcessOutput{}
+	ret := types.DocumentStep{}
 
 	if err := cfg.verifyStoreConnection(); err != nil {
 		return ret, err
@@ -48,10 +48,9 @@ func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentProces
 
 	// read doc from bucket
 	slog.Info("Read file from S3 Bucket")
-	ret.DocumentProcessInput = event
-
-	ret.Document.MathpixDocumentPath = ""
-	ret.Document.ChatGptDocumentPath = ""
+	ret.ID = event.ID
+	ret.DocumentName = event.DocumentName
+	ret.Stage = event.Stage
 
 	slog.Info("uploadLambda process output", "docs", ret)
 

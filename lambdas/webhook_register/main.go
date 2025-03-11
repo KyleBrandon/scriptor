@@ -129,21 +129,21 @@ func (cfg *registerConfig) seedWatchChannels() error {
 	return nil
 }
 
-func (cfg *registerConfig) getDefaultFolderLocations() (types.DefaultGoogleFolderLocations, error) {
+func (cfg *registerConfig) getDefaultFolderLocations() (types.GoogleFolderDefaultLocations, error) {
 
 	// no watch channels yet, let's seed a default
-	folderInfo, err := cfg.getSecret(types.DEFAULT_GOOGLE_FOLDER_LOCATIONS_SECRET)
+	folderInfo, err := cfg.getSecret(types.GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS)
 	if err != nil {
 		slog.Error("Failed to get the default folder locations from AWS secret manager", "error", err)
-		return types.DefaultGoogleFolderLocations{}, err
+		return types.GoogleFolderDefaultLocations{}, err
 	}
 
-	var folderLocations types.DefaultGoogleFolderLocations
+	var folderLocations types.GoogleFolderDefaultLocations
 
 	err = json.Unmarshal([]byte(folderInfo), &folderLocations)
 	if err != nil {
 		slog.Error("Failed to unmarshal default Google folder locations from secret manager", "error", err)
-		return types.DefaultGoogleFolderLocations{}, err
+		return types.GoogleFolderDefaultLocations{}, err
 	}
 
 	return folderLocations, nil

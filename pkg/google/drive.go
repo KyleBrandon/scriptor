@@ -50,7 +50,7 @@ func getGoogleCredentials() ([]byte, error) {
 
 	svc := secretsmanager.NewFromConfig(awsCfg)
 
-	secretName := types.GOOGLE_SERVICE_KEY_SECRET
+	secretName := types.GOOGLE_SERVICE_SECRETS
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
 	result, err := svc.GetSecretValue(context.TODO(), input)
@@ -98,7 +98,10 @@ func (gd *GoogleDriveContext) QueryFiles(folderID string) ([]*types.Document, er
 	query := fmt.Sprintf("mimeType='application/pdf' and ('%s' in parents)", folderID)
 
 	// query the files from Google Drive
-	fileList, err := gd.driveService.Files.List().Q(query).Fields("files(id, name, parents, createdTime, modifiedTime)").Do()
+	fileList, err := gd.driveService.Files.List().
+		Q(query).
+		Fields("files(id, name, parents, createdTime, modifiedTime, size)").
+		Do()
 	if err != nil {
 		slog.Error("Failed to fetch files", "error", err)
 		return nil, err
@@ -125,11 +128,13 @@ func (gd *GoogleDriveContext) QueryFiles(folderID string) ([]*types.Document, er
 
 		// TODO: send to next stage via step function?
 		document := types.Document{
-			ID:           file.Id,
-			FolderID:     file.Parents[0],
-			Name:         file.Name,
-			CreatedTime:  createdTime,
-			ModifiedTime: modifiedTime,
+			ID:             uuid.New().String(),
+			GoogleID:       file.Id,
+			GoogleFolderID: file.Parents[0],
+			Name:           file.Name,
+			Size:           file.Size,
+			CreatedTime:    createdTime,
+			ModifiedTime:   modifiedTime,
 		}
 
 		documents = append(documents, &document)
@@ -141,9 +146,9 @@ func (gd *GoogleDriveContext) QueryFiles(folderID string) ([]*types.Document, er
 // Get a io.Reader for the document
 func (gd *GoogleDriveContext) GetReader(document *types.Document) (io.ReadCloser, error) {
 	// Get the file data
-	resp, err := gd.driveService.Files.Get(document.ID).Download()
+	resp, err := gd.driveService.Files.Get(document.GoogleID).Download()
 	if err != nil {
-		slog.Error("Unable to get the file reader", "error", err)
+		slog.Error("Unable to get the file reader", "GoogleID", document.GoogleID, "error", err)
 		return nil, err
 
 	}

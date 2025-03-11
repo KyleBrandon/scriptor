@@ -13,22 +13,26 @@ import (
 func (cfg *CdkScriptorConfig) initializeSecretsManager(stack awscdk.Stack) {
 
 	// Reference an existing secret in AWS Secrets Manager
-	cfg.GoogleServiceKeySecret = awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String(types.GOOGLE_SERVICE_KEY_SECRET), jsii.String(types.GOOGLE_SERVICE_KEY_SECRET))
+	cfg.GoogleServiceKeySecret = awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String(types.GOOGLE_SERVICE_SECRETS), jsii.String(types.GOOGLE_SERVICE_SECRETS))
 
 	// Reference an existing secret in AWS Secrets Manager
-	cfg.DefaultFoldersSecret = awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String(types.DEFAULT_GOOGLE_FOLDER_LOCATIONS_SECRET), jsii.String(types.DEFAULT_GOOGLE_FOLDER_LOCATIONS_SECRET))
+	cfg.DefaultFoldersSecret = awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String(types.GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS), jsii.String(types.GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS))
+	//
+	// Reference an existing secret in AWS Secrets Manager
+	cfg.MathpixSecrets = awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String(types.MATHPIX_SECRETS), jsii.String(types.MATHPIX_SECRETS))
 
 }
 
 func (cfg *CdkScriptorConfig) initializeDynamoDB(stack awscdk.Stack) {
 	// create table for the Google Drive watch channels
-	cfg.watchChannelTable = awsdynamodb.NewTable(stack, jsii.String(database.WATCH_CHANNEL_TABLE_NAME),
+	cfg.watchChannelTable = awsdynamodb.NewTable(stack, jsii.String("WatchChannelTable"),
 		&awsdynamodb.TableProps{
-			TableName: jsii.String(database.WATCH_CHANNEL_TABLE_NAME),
+			TableName: jsii.String(database.WATCH_CHANNEL_TABLE),
 			PartitionKey: &awsdynamodb.Attribute{
 				Name: jsii.String("folder_id"),
 				Type: awsdynamodb.AttributeType_STRING,
 			},
+			BillingMode: awsdynamodb.BillingMode_PAY_PER_REQUEST,
 		})
 
 	// Add a GSI to query by ChannelID
@@ -52,22 +56,29 @@ func (cfg *CdkScriptorConfig) initializeDynamoDB(stack awscdk.Stack) {
 	})
 
 	// register the Document table
-	cfg.documentTable = awsdynamodb.NewTable(stack, jsii.String(database.DOCUMENT_TABLE_NAME), &awsdynamodb.TableProps{
-		TableName: jsii.String(database.DOCUMENT_TABLE_NAME),
+	cfg.documentTable = awsdynamodb.NewTable(stack, jsii.String("DocumentsTable"), &awsdynamodb.TableProps{
+		TableName: jsii.String(database.DOCUMENT_TABLE),
 		PartitionKey: &awsdynamodb.Attribute{
 			Name: jsii.String("id"),
 			Type: awsdynamodb.AttributeType_STRING,
 		},
+		BillingMode: awsdynamodb.BillingMode_PAY_PER_REQUEST,
 	})
 
-	cfg.documentTable.AddGlobalSecondaryIndex(&awsdynamodb.GlobalSecondaryIndexProps{
-		IndexName: jsii.String("StatusIndex"),
+	// register the DocumentProcessingStage table
+	cfg.documentProcessingStageTable = awsdynamodb.NewTable(stack, jsii.String("DocumentProcessingStageTable"), &awsdynamodb.TableProps{
+		TableName: jsii.String(database.DOCUMENT_PROCESSING_STAGE_TABLE),
 		PartitionKey: &awsdynamodb.Attribute{
-			Name: jsii.String("status"),
+			Name: jsii.String("id"),
 			Type: awsdynamodb.AttributeType_STRING,
 		},
-		ProjectionType: awsdynamodb.ProjectionType_ALL,
+		SortKey: &awsdynamodb.Attribute{
+			Name: jsii.String("stage"),
+			Type: awsdynamodb.AttributeType_STRING,
+		},
+		BillingMode: awsdynamodb.BillingMode_PAY_PER_REQUEST,
 	})
+
 }
 
 func (cfg *CdkScriptorConfig) initializeS3Buckets(stack awscdk.Stack) {
