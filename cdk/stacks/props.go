@@ -21,6 +21,7 @@ type CdkScriptorConfig struct {
 	GoogleServiceKeySecret       awssecretsmanager.ISecret
 	DefaultFoldersSecret         awssecretsmanager.ISecret
 	MathpixSecrets               awssecretsmanager.ISecret
+	ChatgptSecrets               awssecretsmanager.ISecret
 	watchChannelTable            awsdynamodb.Table
 	documentTable                awsdynamodb.Table
 	documentProcessingStageTable awsdynamodb.Table

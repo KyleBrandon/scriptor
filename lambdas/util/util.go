@@ -3,6 +3,8 @@ package util
 import (
 	"encoding/json"
 	"log/slog"
+	"path/filepath"
+	"strings"
 
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/events"
@@ -30,4 +32,12 @@ func BuildStageInput(id, stage, name string) (string, error) {
 	}
 
 	return string(inputJSON), nil
+}
+
+func GetDocumentName(fullName string) string {
+
+	ext := filepath.Ext(fullName)
+	nameWithoutExt := strings.TrimSuffix(fullName, ext)
+
+	return nameWithoutExt
 }

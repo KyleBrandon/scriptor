@@ -116,6 +116,9 @@ func (cfg *CdkScriptorConfig) configureChatgptLambda(stack awscdk.Stack) awslamb
 	// grant the lambda r/w permissions to the document table
 	cfg.documentProcessingStageTable.GrantReadWriteData(chatgptLambda)
 
+	// grant the lambda permission to read the ChatGPT API key secret
+	cfg.ChatgptSecrets.GrantRead(chatgptLambda, nil)
+
 	return chatgptLambda
 }
 

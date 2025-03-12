@@ -68,8 +68,11 @@ func (cfg *downloadConfig) copyDocument(document *types.Document) (string, error
 
 	defer reader.Close()
 
+	// get the name of the document without the extension
+	documentName := util.GetDocumentName(document.Name)
+
 	// Upload to S3
-	key := fmt.Sprintf("staging/%s-%d.pdf", document.Name, time.Now().Unix())
+	key := fmt.Sprintf("staging/%s-%d.pdf", documentName, time.Now().Unix())
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
 		Key:           aws.String(key),
@@ -180,7 +183,10 @@ func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProx
 			continue
 		}
 
-		input, err := util.BuildStageInput(document.ID, types.DOCUMENT_STAGE_DOWNLOADED, document.Name)
+		// get the name of the document without the extension
+		documentName := util.GetDocumentName(document.Name)
+
+		input, err := util.BuildStageInput(document.ID, types.DOCUMENT_STAGE_DOWNLOADED, documentName)
 		if err != nil {
 			slog.Error("Failed to build the stage input for the next stage", "error", err)
 			return util.BuildGatewayResponse("Failed to build the input for the state machine", http.StatusInternalServerError)

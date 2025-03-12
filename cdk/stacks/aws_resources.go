@@ -21,6 +21,9 @@ func (cfg *CdkScriptorConfig) initializeSecretsManager(stack awscdk.Stack) {
 	// Reference an existing secret in AWS Secrets Manager
 	cfg.MathpixSecrets = awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String(types.MATHPIX_SECRETS), jsii.String(types.MATHPIX_SECRETS))
 
+	// Reference an existing secret in AWS Secrets Manager
+	cfg.ChatgptSecrets = awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String(types.CHATGPT_SECRETS), jsii.String(types.CHATGPT_SECRETS))
+
 }
 
 func (cfg *CdkScriptorConfig) initializeDynamoDB(stack awscdk.Stack) {

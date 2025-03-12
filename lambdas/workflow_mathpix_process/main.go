@@ -306,10 +306,10 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 		return ret, err
 	}
 
-	// pass the sssssto the next stage
+	// pass the step info to the next stage
 	ret.ID = event.ID
 	ret.Stage = types.DOCUMENT_STAGE_MATHPIX
-	ret.DocumentName = name
+	ret.DocumentName = event.DocumentName
 
 	return ret, nil
 }

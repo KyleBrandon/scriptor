@@ -15,6 +15,9 @@ const (
 	// Mathpix secrets for using the Mathpix API
 	MATHPIX_SECRETS = "scriptor/mathpix"
 
+	// ChatGPT secrets for using the API
+	CHATGPT_SECRETS = "scriptor/chatgpt"
+
 	// Google Drive folder identifiers for default monitoring
 	GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS = "scriptor/google-folder-defaults"
 
@@ -63,6 +66,11 @@ type (
 	MathpixSecrets struct {
 		AppID  string `json:"mathpix_app_id"`
 		AppKey string `json:"mathpix_app_key"`
+	}
+
+	// ChatGPT API key
+	ChatGptSecrets struct {
+		ApiKey string `json:"api_key"`
 	}
 
 	// WatchChannel represents a folder location to watch for new files to process.

@@ -15,6 +15,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sfn v1.35.1
 	github.com/aws/jsii-runtime-go v1.107.0
 	github.com/google/uuid v1.6.0
+	github.com/sashabaranov/go-openai v1.38.0
 	golang.org/x/oauth2 v0.26.0
 	google.golang.org/api v0.223.0
 )
