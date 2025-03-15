@@ -12,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -49,7 +50,7 @@ type (
 	}
 
 	mathpixConfig struct {
-		store         database.WatchChannelStore
+		store         database.ScriptorStore
 		s3Client      *s3.Client
 		mathpixAppID  string
 		mathpixAppKey string
@@ -207,18 +208,6 @@ func (cfg *mathpixConfig) sendDocumentToMathpix(name string, reader io.Reader) (
 	return uploadResp.PdfID, nil
 }
 
-func (cfg *mathpixConfig) verifyStoreConnection() error {
-	if err := cfg.store.Ping(); err != nil {
-		cfg.store, err = database.NewDynamoDBClient()
-		if err != nil {
-			slog.Error("Failed to configure the DynamoDB client", "error", err)
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
 	slog.Info(">>mathpixLambda.process")
 	defer slog.Info("<<mathpixLambda.process")
@@ -227,32 +216,31 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 
 	ret := types.DocumentStep{}
 
-	if err := cfg.verifyStoreConnection(); err != nil {
-		return ret, err
-	}
-
-	// Update the 'download' processing stage to in-progress
-	stage := types.DocumentProcessingStage{
-		ID:          event.ID,
-		Stage:       types.DOCUMENT_STAGE_MATHPIX,
-		StageStatus: types.DOCUMENT_STATUS_INPROGRESS,
-	}
-
-	err := cfg.store.InsertDocumentStage(stage)
+	var err error
+	cfg.store, err = util.VerifyStoreConnection(cfg.store)
 	if err != nil {
-		slog.Error("Failed to save the document processing stage", "error", err)
+		slog.Error("Failed to verify the DynamoDB client", "error", err)
 		return ret, err
 	}
 
-	documentStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
+	// query the previous stage information
+	prevStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
 	if err != nil {
-		slog.Error("Failed to query the document stage", "id", event.ID, "stage", event.Stage, "error", err)
+		slog.Error("Failed to get the previous stage information", "id", event.ID, "stage", event.Stage, "error", err)
 		return ret, err
 	}
 
+	// create the mathpix stage entry
+	mathpixStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_MATHPIX, types.DOCUMENT_STATUS_INPROGRESS)
+	if err != nil {
+		slog.Error("Failed to start the Mathpix document processing stage", "error", err)
+		return ret, err
+	}
+
+	// get the input file form S3
 	resp, err := cfg.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String(types.S3_BUCKET_NAME),
-		Key:    aws.String(documentStage.S3Key),
+		Key:    aws.String(prevStage.S3Key),
 	})
 	if err != nil {
 		slog.Error("Failed to get the document from S3", "error", err)
@@ -262,7 +250,7 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 	defer resp.Body.Close()
 
 	// Upload PDF to Mathpix
-	pdfID, err := cfg.sendDocumentToMathpix(event.DocumentName, resp.Body)
+	pdfID, err := cfg.sendDocumentToMathpix(prevStage.FileName, resp.Body)
 	if err != nil {
 		slog.Error("Error uploading PDF", "error", err)
 		return ret, err
@@ -282,7 +270,9 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 
 	}
 
-	name := fmt.Sprintf("%s-%d.md", event.DocumentName, time.Now().Unix())
+	documentName := util.GetDocumentName(prevStage.FileName)
+
+	name := fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
 	key := fmt.Sprintf("mathpix/%s", name)
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
@@ -297,10 +287,11 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	// Update the stage to complete
-	stage.S3Key = key
-	stage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
+	mathpixStage.FileName = name
+	mathpixStage.S3Key = key
+	mathpixStage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
 
-	err = cfg.store.UpdateDocumentStage(stage)
+	err = cfg.store.UpdateDocumentStage(mathpixStage)
 	if err != nil {
 		slog.Error("Failed to update the processing stage as complete", "error", err)
 		return ret, err
@@ -309,7 +300,6 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 	// pass the step info to the next stage
 	ret.ID = event.ID
 	ret.Stage = types.DOCUMENT_STAGE_MATHPIX
-	ret.DocumentName = event.DocumentName
 
 	return ret, nil
 }

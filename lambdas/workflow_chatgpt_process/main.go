@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -22,7 +23,7 @@ import (
 )
 
 type chatgptConfig struct {
-	store    database.WatchChannelStore
+	store    database.ScriptorStore
 	s3Client *s3.Client
 	apiKey   string
 }
@@ -32,18 +33,6 @@ var (
 	cfg        *chatgptConfig
 )
 
-func (cfg *chatgptConfig) verifyStoreConnection() error {
-	if err := cfg.store.Ping(); err != nil {
-		cfg.store, err = database.NewDynamoDBClient()
-		if err != nil {
-			slog.Error("Failed to configure the DynamoDB client", "error", err)
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
 	slog.Info(">>chatgptLambda.process")
 	defer slog.Info("<<chatgptLambda.process")
@@ -52,31 +41,29 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 
 	ret := types.DocumentStep{}
 
-	if err := cfg.verifyStoreConnection(); err != nil {
+	var err error
+	cfg.store, err = util.VerifyStoreConnection(cfg.store)
+	if err != nil {
+		slog.Error("Failed to verify the DynamoDB client", "error", err)
 		return ret, err
 	}
-	// Update the 'download' processing stage to in-progress
-	stage := types.DocumentProcessingStage{
-		ID:          event.ID,
-		Stage:       types.DOCUMENT_STAGE_CHATGPT,
-		StageStatus: types.DOCUMENT_STATUS_INPROGRESS,
+
+	// query the previous stage information
+	prevStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
+	if err != nil {
+		slog.Error("Failed to get the previous stage information", "id", event.ID, "stage", event.Stage, "error", err)
+		return ret, err
 	}
 
-	err := cfg.store.InsertDocumentStage(stage)
+	chatgptStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_CHATGPT, types.DOCUMENT_STATUS_INPROGRESS)
 	if err != nil {
 		slog.Error("Failed to save the document processing stage", "error", err)
 		return ret, err
 	}
 
-	documentStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
-	if err != nil {
-		slog.Error("Failed to query the document stage", "id", event.ID, "stage", event.Stage, "error", err)
-		return ret, err
-	}
-
 	resp, err := cfg.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String(types.S3_BUCKET_NAME),
-		Key:    aws.String(documentStage.S3Key),
+		Key:    aws.String(prevStage.S3Key),
 	})
 	if err != nil {
 		slog.Error("Failed to get the document from S3", "error", err)
@@ -123,7 +110,9 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	// If so, remove it.
 	cleanedMarkdown := strings.TrimPrefix(strings.TrimSuffix(string(buffer), "```"), "```markdown")
 
-	name := fmt.Sprintf("%s-%d.md", event.DocumentName, time.Now().Unix())
+	documentName := util.GetDocumentName(prevStage.FileName)
+
+	name := fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
 	key := fmt.Sprintf("chatgpt/%s", name)
 
 	body := []byte(cleanedMarkdown)
@@ -142,10 +131,11 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	// Update the stage to complete
-	stage.S3Key = key
-	stage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
+	chatgptStage.FileName = name
+	chatgptStage.S3Key = key
+	chatgptStage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
 
-	err = cfg.store.UpdateDocumentStage(stage)
+	err = cfg.store.UpdateDocumentStage(chatgptStage)
 	if err != nil {
 		slog.Error("Failed to update the processing stage as complete", "error", err)
 		return ret, err
@@ -153,7 +143,6 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 
 	// read doc from bucket
 	ret.ID = event.ID
-	ret.DocumentName = event.DocumentName
 	ret.Stage = types.DOCUMENT_STAGE_CHATGPT
 
 	slog.Info("chatgptLambda process output", "docs", ret)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/KyleBrandon/scriptor/pkg/database"
@@ -21,11 +22,11 @@ import (
 
 type GoogleDriveContext struct {
 	driveService *drive.Service
-	store        database.WatchChannelStore
+	store        database.ScriptorStore
 }
 
 // Create a new Google Drive storage context
-func NewGoogleDrive(store database.WatchChannelStore) (*GoogleDriveContext, error) {
+func NewGoogleDrive(store database.ScriptorStore) (*GoogleDriveContext, error) {
 	slog.Debug(">>GDriveStorageContext.New")
 	defer slog.Debug("<<GDriveStorageContext.New")
 
@@ -143,6 +144,30 @@ func (gd *GoogleDriveContext) QueryFiles(folderID string) ([]*types.Document, er
 	return documents, nil
 }
 
+func (gd *GoogleDriveContext) Archive(document *types.Document, archiveFolderID string) error {
+	// 	// move the document to the archive folder
+	file, err := gd.driveService.Files.Get(document.GoogleID).Fields("parents").Do()
+	if err != nil {
+		return err
+	}
+
+	if len(archiveFolderID) == 0 {
+		return fmt.Errorf("failed to find an archive folder for document: %s in folder: %s", document.Name, document.GoogleID)
+	}
+
+	previousParents := strings.Join(file.Parents, ",")
+	_, err = gd.driveService.Files.Update(document.GoogleID, nil).
+		AddParents(archiveFolderID).
+		RemoveParents(previousParents).
+		Fields("id, parents").
+		Do()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Get a io.Reader for the document
 func (gd *GoogleDriveContext) GetReader(document *types.Document) (io.ReadCloser, error) {
 	// Get the file data
@@ -154,6 +179,26 @@ func (gd *GoogleDriveContext) GetReader(document *types.Document) (io.ReadCloser
 	}
 
 	return resp.Body, nil
+}
+
+// Save a file to a Google Drive folder location
+func (gd *GoogleDriveContext) SaveFile(fileName, folderID string, reader io.Reader) error {
+	// Define file metadata (including folder destination)
+	fileMetadata := &drive.File{
+		Name:    fileName,
+		Parents: []string{folderID}, // Upload to specific folder
+	}
+
+	// Upload the file
+	_, err := gd.driveService.Files.Create(fileMetadata).
+		Media(reader).
+		Do()
+
+	if err != nil {
+		return fmt.Errorf("unable to upload file: %w", err)
+	}
+
+	return nil
 }
 
 func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {

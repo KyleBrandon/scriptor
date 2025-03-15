@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,26 +12,17 @@ import (
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 )
 
 type registerConfig struct {
-	store          database.WatchChannelStore
-	dc             *google.GoogleDriveContext
-	webhookURL     string
-	secretsManager *secretsmanager.Client
+	store      database.ScriptorStore
+	dc         *google.GoogleDriveContext
+	webhookURL string
 }
 
 func main() {
 	slog.Debug(">>RegisterWebhook.main")
 	defer slog.Debug("<<RegisterWebhook.main")
-
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		slog.Error("failed to load the AWS config", "error", err)
-		os.Exit(1)
-	}
 
 	store, err := database.NewDynamoDBClient()
 	if err != nil {
@@ -54,13 +43,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	secretsManager := secretsmanager.NewFromConfig(awsCfg)
-
 	cfg := &registerConfig{
 		store,
 		dc,
-		webhookURL,
-		secretsManager}
+		webhookURL}
 
 	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 		slog.Debug(">>RegisterWebhook.lambda")
@@ -81,18 +67,6 @@ func main() {
 	})
 }
 
-func (cfg *registerConfig) getSecret(secretName string) (string, error) {
-
-	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
-
-	result, err := cfg.secretsManager.GetSecretValue(context.TODO(), input)
-	if err != nil {
-		return "", err
-	}
-
-	return *result.SecretString, nil
-}
-
 func (cfg *registerConfig) seedWatchChannels() error {
 	slog.Debug(">>seedWatchChannels")
 	defer slog.Debug("<<seedWatchChannels")
@@ -109,7 +83,7 @@ func (cfg *registerConfig) seedWatchChannels() error {
 		return nil
 	}
 
-	folderLocations, err := cfg.getDefaultFolderLocations()
+	folderLocations, err := util.GetDefaultFolderLocations()
 	if err != nil {
 		return err
 	}
@@ -127,25 +101,4 @@ func (cfg *registerConfig) seedWatchChannels() error {
 	}
 
 	return nil
-}
-
-func (cfg *registerConfig) getDefaultFolderLocations() (types.GoogleFolderDefaultLocations, error) {
-
-	// no watch channels yet, let's seed a default
-	folderInfo, err := cfg.getSecret(types.GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS)
-	if err != nil {
-		slog.Error("Failed to get the default folder locations from AWS secret manager", "error", err)
-		return types.GoogleFolderDefaultLocations{}, err
-	}
-
-	var folderLocations types.GoogleFolderDefaultLocations
-
-	err = json.Unmarshal([]byte(folderInfo), &folderLocations)
-	if err != nil {
-		slog.Error("Failed to unmarshal default Google folder locations from secret manager", "error", err)
-		return types.GoogleFolderDefaultLocations{}, err
-	}
-
-	return folderLocations, nil
-
 }

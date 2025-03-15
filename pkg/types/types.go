@@ -38,7 +38,7 @@ const (
 	DOCUMENT_STAGE_CHATGPT = "chatgpt"
 
 	// Document stage uploaded
-	DOCUMENT_STAGE_UPLOADED = "uploaded"
+	DOCUMENT_STAGE_UPLOAD = "uploaded"
 
 	//
 	// Document status values
@@ -108,14 +108,14 @@ type (
 		ID          string    `dynamodbav:"id"`
 		Stage       string    `dynamodbav:"stage"`
 		CreatedAt   time.Time `dynamodbav:"created_at"`
+		FileName    string    `dynamodbav:"file_name"`
 		S3Key       string    `dynamodbav:"s3key"`
 		StageStatus string    `dynamodbav:"stage_status"`
 		Metadata    string    `dynamodbav:"metadata"`
 	}
 
 	DocumentStep struct {
-		ID           string `json:"id"`
-		Stage        string `json:"stage"`
-		DocumentName string `json:"document_name"`
+		ID    string `json:"id"`
+		Stage string `json:"stage"`
 	}
 )

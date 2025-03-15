@@ -135,8 +135,10 @@ func (cfg *CdkScriptorConfig) configureUploadLambda(stack awscdk.Stack) awslambd
 	cfg.documentTable.GrantReadWriteData(uploadLambda)
 	// grant the lambda r/w permissions to the document table
 	cfg.documentProcessingStageTable.GrantReadWriteData(uploadLambda)
-	// grant lambda permissions to read the secrets
+	// grant lambda read permissions to Google Drive API key
 	cfg.GoogleServiceKeySecret.GrantRead(uploadLambda, nil)
+	// grant lambda r/w permissions to the default Google Drive folders
+	cfg.DefaultFoldersSecret.GrantRead(uploadLambda, nil)
 
 	return uploadLambda
 }

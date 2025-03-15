@@ -21,23 +21,24 @@ const (
 	DOCUMENT_PROCESSING_STAGE_TABLE = "DocumentProcessingStage"
 )
 
-type WatchChannelStore interface {
+type ScriptorStore interface {
 	Ping() error
 	GetWatchChannels() ([]stypes.WatchChannel, error)
 	InsertWatchChannel(watchChannel stypes.WatchChannel) error
 	UpdateWatchChannel(watchChannel stypes.WatchChannel) error
 	GetWatchChannelByChannel(folderID string) (stypes.WatchChannel, error)
 	InsertDocument(document stypes.Document) error
-	InsertDocumentStage(stage stypes.DocumentProcessingStage) error
-	UpdateDocumentStage(stage stypes.DocumentProcessingStage) error
+	GetDocument(id string) (stypes.Document, error)
 	GetDocumentStage(id, stage string) (stypes.DocumentProcessingStage, error)
+	StartDocumentStage(id, stage, status string) (stypes.DocumentProcessingStage, error)
+	UpdateDocumentStage(stage stypes.DocumentProcessingStage) error
 }
 
 type DynamoDBClient struct {
 	store *dynamodb.Client
 }
 
-func NewDynamoDBClient() (WatchChannelStore, error) {
+func NewDynamoDBClient() (ScriptorStore, error) {
 	awsCfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		slog.Error("Failed to configure the DynamoDBClient", "error", err)
@@ -56,6 +57,32 @@ func (u DynamoDBClient) Ping() error {
 	_, err := u.GetWatchChannels()
 
 	return err
+}
+
+func (u DynamoDBClient) GetDocument(id string) (stypes.Document, error) {
+
+	ret := stypes.Document{}
+
+	getItemInput := &dynamodb.GetItemInput{
+		TableName: aws.String(DOCUMENT_TABLE),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: id},
+		},
+	}
+
+	result, err := u.store.GetItem(context.TODO(), getItemInput)
+	if err != nil {
+		slog.Error("Failed to query the document", "error", err)
+		return ret, err
+	}
+
+	err = attributevalue.UnmarshalMap(result.Item, &ret)
+	if err != nil {
+		slog.Error("Failed to unmarshal the document", "error", err)
+		return ret, err
+	}
+
+	return ret, nil
 }
 
 func (u DynamoDBClient) InsertDocument(document stypes.Document) error {
@@ -111,7 +138,7 @@ func (u DynamoDBClient) GetDocumentStage(id, stage string) (stypes.DocumentProce
 	return documentStage, nil
 }
 
-func (u DynamoDBClient) InsertDocumentStage(stage stypes.DocumentProcessingStage) error {
+func (u DynamoDBClient) insertDocumentStage(stage stypes.DocumentProcessingStage) error {
 
 	stage.CreatedAt = time.Now().UTC()
 
@@ -134,6 +161,22 @@ func (u DynamoDBClient) InsertDocumentStage(stage stypes.DocumentProcessingStage
 
 	return nil
 
+}
+func (u DynamoDBClient) StartDocumentStage(id, stage, status string) (stypes.DocumentProcessingStage, error) {
+	// Update the 'download' processing stage to in-progress
+	docStage := stypes.DocumentProcessingStage{
+		ID:          id,
+		Stage:       stage,
+		StageStatus: status,
+	}
+
+	err := u.insertDocumentStage(docStage)
+	if err != nil {
+		slog.Error("Failed to save the document processing stage", "error", err)
+		return docStage, err
+	}
+
+	return docStage, nil
 }
 
 func (u DynamoDBClient) UpdateDocumentStage(stage stypes.DocumentProcessingStage) error {
