@@ -127,7 +127,6 @@ func (gd *GoogleDriveContext) QueryFiles(folderID string) ([]*types.Document, er
 			slog.Warn("Failed to parse the modified time for the file", "fileID", file.Id, "fileName", file.Name, "modifiedTime", file.ModifiedTime, "error", err)
 		}
 
-		// TODO: send to next stage via step function?
 		document := types.Document{
 			ID:             uuid.New().String(),
 			GoogleID:       file.Id,
@@ -202,9 +201,10 @@ func (gd *GoogleDriveContext) SaveFile(fileName, folderID string, reader io.Read
 }
 
 func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {
-	slog.Debug(">>ReRegisterWebhook")
-	defer slog.Debug("<<ReRegisterWebhook")
+	slog.Info(">>ReRegisterWebhook")
+	defer slog.Info("<<ReRegisterWebhook")
 
+	// TODO: Remove the reference to the 'store'
 	// get all the channels that we're currently watching
 	watchChannels, err := gd.store.GetWatchChannels()
 	if err != nil {
@@ -224,12 +224,13 @@ func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {
 	for _, wc := range watchChannels {
 		if wc.ExpiresAt <= channelRegisterTime || wc.WebhookUrl != url {
 			// we need to re-register this channel
+			slog.Info("channel is not expired and the webhook URL has not changed")
 			register = append(register, wc)
 		}
 	}
 
 	if len(register) == 0 {
-		slog.Debug("No watch channels require re-registration")
+		slog.Info("No watch channels require re-registration")
 		return nil
 	}
 
@@ -244,8 +245,8 @@ func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {
 }
 
 func (gd *GoogleDriveContext) createWatchChannel(wc types.WatchChannel, url string) error {
-	slog.Debug(">>createWatchChannel")
-	defer slog.Debug("<<createWatchChannel")
+	slog.Info(">>createWatchChannel")
+	defer slog.Info("<<createWatchChannel")
 
 	wc.ChannelID = uuid.New().String()
 	wc.ExpiresAt = time.Now().Add(48 * time.Hour).UnixMilli()

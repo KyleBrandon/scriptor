@@ -29,6 +29,7 @@ func (cfg *CdkScriptorConfig) NewWebHookRegisterStack(id string) awscdk.Stack {
 	// grant the lambda permissions to read/write the watch channel table
 	cfg.watchChannelTable.GrantReadWriteData(myFunction)
 
+	// TODO: Make this less frequent, perhaps a configuration to indicate the number of days to re-register
 	// setup an event to trigger the lambda every 7 days
 	rule := awsevents.NewRule(stack, jsii.String("WebhookRegisterSchedule"), &awsevents.RuleProps{
 		Schedule: awsevents.Schedule_Rate(awscdk.Duration_Days(aws.Float64(1))),

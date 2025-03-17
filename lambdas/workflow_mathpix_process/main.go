@@ -157,19 +157,30 @@ func (cfg *mathpixConfig) queryConversionResults(pdfID string) ([]byte, error) {
 	return body, nil
 }
 
-func (cfg *mathpixConfig) sendDocumentToMathpix(name string, reader io.Reader) (string, error) {
+func (cfg *mathpixConfig) sendDocumentToMathpix(prevStage types.DocumentProcessingStage) (string, error) {
+	// get the input file form S3
+	resp, err := cfg.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		Bucket: aws.String(types.S3_BUCKET_NAME),
+		Key:    aws.String(prevStage.S3Key),
+	})
+	if err != nil {
+		slog.Error("Failed to get the document from S3", "error", err)
+		return "", err
+	}
+
+	defer resp.Body.Close()
 
 	// Create multipart form data
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	part, err := writer.CreateFormFile("file", name)
+	part, err := writer.CreateFormFile("file", prevStage.StageFileName)
 	if err != nil {
 		slog.Error("Failed to create form file", "error", err)
 		return "", err
 	}
 
 	// copy the document input to the request body
-	_, err = io.Copy(part, reader)
+	_, err = io.Copy(part, resp.Body)
 	if err != nil {
 		slog.Error("Failed to copy file to form part", "error", err)
 		return "", err
@@ -231,26 +242,14 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	// create the mathpix stage entry
-	mathpixStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_MATHPIX, types.DOCUMENT_STATUS_INPROGRESS)
+	mathpixStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_MATHPIX, prevStage.OriginalFileName)
 	if err != nil {
 		slog.Error("Failed to start the Mathpix document processing stage", "error", err)
 		return ret, err
 	}
 
-	// get the input file form S3
-	resp, err := cfg.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
-		Bucket: aws.String(types.S3_BUCKET_NAME),
-		Key:    aws.String(prevStage.S3Key),
-	})
-	if err != nil {
-		slog.Error("Failed to get the document from S3", "error", err)
-		return ret, err
-	}
-
-	defer resp.Body.Close()
-
 	// Upload PDF to Mathpix
-	pdfID, err := cfg.sendDocumentToMathpix(prevStage.FileName, resp.Body)
+	pdfID, err := cfg.sendDocumentToMathpix(prevStage)
 	if err != nil {
 		slog.Error("Error uploading PDF", "error", err)
 		return ret, err
@@ -270,28 +269,26 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 
 	}
 
-	documentName := util.GetDocumentName(prevStage.FileName)
+	// Get the original document name w/o extension
+	documentName := util.GetDocumentName(prevStage.OriginalFileName)
 
-	name := fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
-	key := fmt.Sprintf("mathpix/%s", name)
+	mathpixStage.StageFileName = fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
+	mathpixStage.S3Key = fmt.Sprintf("%s/%s", mathpixStage.Stage, mathpixStage.StageFileName)
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
-		Key:           aws.String(key),
+		Key:           aws.String(mathpixStage.S3Key),
 		Body:          bytes.NewReader(body),
 		ContentType:   aws.String("text/markdown"),
 		ContentLength: aws.Int64(int64(len(body))),
 	})
 	if err != nil {
-		slog.Error("Failed to save the document in the S3 bucket", "key", key, "error", err)
+		slog.Error("Failed to save the document in the S3 bucket", "key", mathpixStage.S3Key, "error", err)
 		return ret, err
 	}
 
 	// Update the stage to complete
-	mathpixStage.FileName = name
-	mathpixStage.S3Key = key
-	mathpixStage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
 
-	err = cfg.store.UpdateDocumentStage(mathpixStage)
+	err = cfg.store.CompleteDocumentStage(mathpixStage)
 	if err != nil {
 		slog.Error("Failed to update the processing stage as complete", "error", err)
 		return ret, err

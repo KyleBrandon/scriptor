@@ -33,33 +33,41 @@ var (
 	cfg        *downloadConfig
 )
 
-func (cfg *downloadConfig) copyDocument(document *types.Document) (string, error) {
+func (cfg *downloadConfig) copyDocument(document *types.Document, stage *types.DocumentProcessingStage) error {
 	reader, err := cfg.dc.GetReader(document)
 	if err != nil {
 		slog.Error("Failed to get a reader for the document", "error", err)
-		return "", err
+		return err
 	}
 
 	defer reader.Close()
 
-	// get the name of the document without the extension
+	// get the name of the original document w/o extension
 	documentName := util.GetDocumentName(document.Name)
 
-	// Upload to S3
-	key := fmt.Sprintf("staging/%s-%d.pdf", documentName, time.Now().Unix())
+	// Save the original filename with the stage
+	stage.OriginalFileName = document.Name
+
+	// build the file name for the stage to have a timestamp
+	stage.StageFileName = fmt.Sprintf("%s-%d.pdf", documentName, time.Now().Unix())
+
+	// construct the S3 Key for the file stage
+	stage.S3Key = fmt.Sprintf("%s/%s", stage.Stage, stage.StageFileName)
+
+	// store the file for the stage
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
-		Key:           aws.String(key),
+		Key:           aws.String(stage.S3Key),
 		Body:          reader,
 		ContentType:   aws.String("application/pdf"),
 		ContentLength: aws.Int64(document.Size),
 	})
 	if err != nil {
 		slog.Error("Failed to save the document in the S3 bucket", "docName", document.Name, "error", err)
-		return "", err
+		return err
 	}
 
-	return key, nil
+	return nil
 }
 
 func queryWatchChannelForRequest(request events.APIGatewayProxyRequest) (*types.WatchChannel, error) {
@@ -106,23 +114,20 @@ func (cfg *downloadConfig) processDocuments(documents []*types.Document) error {
 		}
 
 		// Start document stage to in-progress
-		stage, err := cfg.store.StartDocumentStage(document.ID, types.DOCUMENT_STAGE_DOWNLOADED, types.DOCUMENT_STATUS_INPROGRESS)
+		stage, err := cfg.store.StartDocumentStage(document.ID, types.DOCUMENT_STAGE_DOWNLOADED, document.Name)
 		if err != nil {
 			slog.Error("Failed to save the document processing stage", "error", err)
 			return err
 		}
 
 		// copy the original document to S3
-		path, err := cfg.copyDocument(document)
+		err = cfg.copyDocument(document, &stage)
 		if err != nil {
 			return err
 		}
 
 		// update the document stage to complete
-		stage.FileName = document.Name
-		stage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
-		stage.S3Key = path
-		err = cfg.store.UpdateDocumentStage(stage)
+		err = cfg.store.CompleteDocumentStage(stage)
 		if err != nil {
 			slog.Error("Failed to update the processing stage as complete", "error", err)
 			return err

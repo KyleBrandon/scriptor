@@ -105,13 +105,14 @@ type (
 
 	// DocumentProcessingStage tracks the document through each stage of processing.
 	DocumentProcessingStage struct {
-		ID          string    `dynamodbav:"id"`
-		Stage       string    `dynamodbav:"stage"`
-		CreatedAt   time.Time `dynamodbav:"created_at"`
-		FileName    string    `dynamodbav:"file_name"`
-		S3Key       string    `dynamodbav:"s3key"`
-		StageStatus string    `dynamodbav:"stage_status"`
-		Metadata    string    `dynamodbav:"metadata"`
+		ID               string    `dynamodbav:"id"`
+		Stage            string    `dynamodbav:"stage"`
+		StageStatus      string    `dynamodbav:"stage_status"`
+		StartedAt        time.Time `dynamodbav:"created_at"`
+		CompletedAt      time.Time `dynamodbav:"created_at"`
+		OriginalFileName string    `dynamodbav:"original_file_name"`
+		StageFileName    string    `dynamodbav:"file_name"`
+		S3Key            string    `dynamodbav:"s3key"`
 	}
 
 	DocumentStep struct {

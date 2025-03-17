@@ -43,13 +43,7 @@ func (cfg *uploadConfig) getFileReaderForStage(s3FileKey string) (io.ReadCloser,
 
 }
 
-func (cfg *uploadConfig) saveStageToFolder(id, stage, folderID string) error {
-	// Get the original document file
-	docStage, err := cfg.store.GetDocumentStage(id, stage)
-	if err != nil {
-		slog.Error("Failed to read the document stage", "documentID", id, "stage", stage, "error", err)
-		return err
-	}
+func (cfg *uploadConfig) saveStageToFolder(docStage types.DocumentProcessingStage, folderID string) error {
 
 	// Get a reader from the S3 file location
 	docReader, err := cfg.getFileReaderForStage(docStage.S3Key)
@@ -61,7 +55,7 @@ func (cfg *uploadConfig) saveStageToFolder(id, stage, folderID string) error {
 	defer docReader.Close()
 
 	// Save the file to the destination folder
-	err = cfg.dc.SaveFile(docStage.FileName, folderID, docReader)
+	err = cfg.dc.SaveFile(docStage.StageFileName, folderID, docReader)
 	if err != nil {
 		slog.Error("Failed to save the original document file to the destination folder", "error", err)
 		return err
@@ -88,8 +82,15 @@ func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentStep) 
 		return err
 	}
 
+	// query the previous stage information
+	prevStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
+	if err != nil {
+		slog.Error("Failed to get the previous stage information", "id", event.ID, "stage", event.Stage, "error", err)
+		return err
+	}
+
 	// Start the document upload stage
-	uploadStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_UPLOAD, types.DOCUMENT_STATUS_INPROGRESS)
+	uploadStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_UPLOAD, prevStage.OriginalFileName)
 	if err != nil {
 		slog.Error("Failed to start the Mathpix document processing stage", "error", err)
 		return err
@@ -102,21 +103,27 @@ func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentStep) 
 		return err
 	}
 
+	// query the previous stage information
+	downloadedStage, err := cfg.store.GetDocumentStage(event.ID, types.DOCUMENT_STAGE_DOWNLOADED)
+	if err != nil {
+		slog.Error("Failed to get the Document Downloaded Stage information", "id", event.ID, "error", err)
+		return err
+	}
+
 	// Save the original PDF file to the destination folder
-	err = cfg.saveStageToFolder(event.ID, types.DOCUMENT_STAGE_DOWNLOADED, folderLocations.DestFolderID)
+	err = cfg.saveStageToFolder(downloadedStage, folderLocations.DestFolderID)
 	if err != nil {
 		slog.Error("Failed to save the original PDF to the destination folder", "id", event.ID, "folderID", folderLocations.FolderID, "error", err)
 		return err
 	}
 
 	// Save the output from the last stage to the destination folder
-	err = cfg.saveStageToFolder(event.ID, event.Stage, folderLocations.DestFolderID)
+	err = cfg.saveStageToFolder(prevStage, folderLocations.DestFolderID)
 	if err != nil {
-		slog.Error("Failed to save the output stage to the destination folder", "id", event.ID, "stage", event.Stage, "folderID", folderLocations.FolderID, "error", err)
+		slog.Error("Failed to save the final output stage to the destination folder", "id", event.ID, "stage", prevStage.Stage, "folderID", folderLocations.FolderID, "error", err)
 		return err
 	}
 
-	// TODO: Archive the original PDF in the watch folder
 	document, err := cfg.store.GetDocument(event.ID)
 	if err != nil {
 		slog.Error("Failed to get the document information to archive", "id", event.ID, "error", err)
@@ -130,8 +137,7 @@ func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentStep) 
 	}
 
 	// Update the stage to complete
-	uploadStage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
-	err = cfg.store.UpdateDocumentStage(uploadStage)
+	err = cfg.store.CompleteDocumentStage(uploadStage)
 	if err != nil {
 		slog.Error("Failed to update the processing stage as complete", "error", err)
 		return err

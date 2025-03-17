@@ -30,8 +30,8 @@ type ScriptorStore interface {
 	InsertDocument(document stypes.Document) error
 	GetDocument(id string) (stypes.Document, error)
 	GetDocumentStage(id, stage string) (stypes.DocumentProcessingStage, error)
-	StartDocumentStage(id, stage, status string) (stypes.DocumentProcessingStage, error)
-	UpdateDocumentStage(stage stypes.DocumentProcessingStage) error
+	StartDocumentStage(id, stage, originalFileName string) (stypes.DocumentProcessingStage, error)
+	CompleteDocumentStage(stage stypes.DocumentProcessingStage) error
 }
 
 type DynamoDBClient struct {
@@ -140,7 +140,7 @@ func (u DynamoDBClient) GetDocumentStage(id, stage string) (stypes.DocumentProce
 
 func (u DynamoDBClient) insertDocumentStage(stage stypes.DocumentProcessingStage) error {
 
-	stage.CreatedAt = time.Now().UTC()
+	stage.StartedAt = time.Now().UTC()
 
 	av, err := attributevalue.MarshalMap(stage)
 	if err != nil {
@@ -162,12 +162,14 @@ func (u DynamoDBClient) insertDocumentStage(stage stypes.DocumentProcessingStage
 	return nil
 
 }
-func (u DynamoDBClient) StartDocumentStage(id, stage, status string) (stypes.DocumentProcessingStage, error) {
+func (u DynamoDBClient) StartDocumentStage(id, stage, originalFileName string) (stypes.DocumentProcessingStage, error) {
 	// Update the 'download' processing stage to in-progress
 	docStage := stypes.DocumentProcessingStage{
-		ID:          id,
-		Stage:       stage,
-		StageStatus: status,
+		ID:               id,
+		Stage:            stage,
+		StageStatus:      stypes.DOCUMENT_STATUS_INPROGRESS,
+		StartedAt:        time.Now().UTC(),
+		OriginalFileName: originalFileName,
 	}
 
 	err := u.insertDocumentStage(docStage)
@@ -179,9 +181,10 @@ func (u DynamoDBClient) StartDocumentStage(id, stage, status string) (stypes.Doc
 	return docStage, nil
 }
 
-func (u DynamoDBClient) UpdateDocumentStage(stage stypes.DocumentProcessingStage) error {
+func (u DynamoDBClient) CompleteDocumentStage(stage stypes.DocumentProcessingStage) error {
 
-	stage.CreatedAt = time.Now().UTC()
+	stage.CompletedAt = time.Now().UTC()
+	stage.StageStatus = stypes.DOCUMENT_STATUS_COMPLETE
 
 	key := map[string]types.AttributeValue{
 		"id":    &types.AttributeValueMemberS{Value: stage.ID},

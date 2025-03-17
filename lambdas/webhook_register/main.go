@@ -21,8 +21,8 @@ type registerConfig struct {
 }
 
 func main() {
-	slog.Debug(">>RegisterWebhook.main")
-	defer slog.Debug("<<RegisterWebhook.main")
+	slog.Info(">>RegisterWebhook.main")
+	defer slog.Info("<<RegisterWebhook.main")
 
 	store, err := database.NewDynamoDBClient()
 	if err != nil {
@@ -49,8 +49,8 @@ func main() {
 		webhookURL}
 
 	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-		slog.Debug(">>RegisterWebhook.lambda")
-		defer slog.Debug("<<RegisterWebhook.lambda")
+		slog.Info(">>RegisterWebhook.lambda")
+		defer slog.Info("<<RegisterWebhook.lambda")
 
 		err = cfg.seedWatchChannels()
 		if err != nil {
@@ -68,23 +68,25 @@ func main() {
 }
 
 func (cfg *registerConfig) seedWatchChannels() error {
-	slog.Debug(">>seedWatchChannels")
-	defer slog.Debug("<<seedWatchChannels")
+	slog.Info(">>seedWatchChannels")
+	defer slog.Info("<<seedWatchChannels")
 
 	// get all the watch channels
 	existing, err := cfg.store.GetWatchChannels()
 	if err != nil {
+		slog.Error("Failed to query the watch channels", "error", err)
 		return err
 	}
 
 	// do we have any watch channels configured
 	if len(existing) != 0 {
-		slog.Debug("No need to seed a watch channel, already configured")
+		slog.Info("No need to seed a watch channel, already configured")
 		return nil
 	}
 
 	folderLocations, err := util.GetDefaultFolderLocations()
 	if err != nil {
+		slog.Error("Failed to get the default folder locations", "error", err)
 		return err
 	}
 

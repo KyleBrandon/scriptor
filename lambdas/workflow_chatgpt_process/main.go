@@ -55,7 +55,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 		return ret, err
 	}
 
-	chatgptStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_CHATGPT, types.DOCUMENT_STATUS_INPROGRESS)
+	chatgptStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_CHATGPT, prevStage.OriginalFileName)
 	if err != nil {
 		slog.Error("Failed to save the document processing stage", "error", err)
 		return ret, err
@@ -110,32 +110,29 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	// If so, remove it.
 	cleanedMarkdown := strings.TrimPrefix(strings.TrimSuffix(string(buffer), "```"), "```markdown")
 
-	documentName := util.GetDocumentName(prevStage.FileName)
+	// Get the original document name w/o extension
+	documentName := util.GetDocumentName(prevStage.OriginalFileName)
 
-	name := fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
-	key := fmt.Sprintf("chatgpt/%s", name)
+	chatgptStage.StageFileName = fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
+	chatgptStage.S3Key = fmt.Sprintf("%s/%s", chatgptStage.Stage, chatgptStage.StageFileName)
 
 	body := []byte(cleanedMarkdown)
 
 	//
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
-		Key:           aws.String(key),
+		Key:           aws.String(chatgptStage.S3Key),
 		Body:          bytes.NewReader(body),
 		ContentType:   aws.String("text/markdown"),
 		ContentLength: aws.Int64(int64(len(body))),
 	})
 	if err != nil {
-		slog.Error("Failed to save the document in the S3 bucket", "key", key, "error", err)
+		slog.Error("Failed to save the document in the S3 bucket", "key", chatgptStage.S3Key, "error", err)
 		return ret, err
 	}
 
 	// Update the stage to complete
-	chatgptStage.FileName = name
-	chatgptStage.S3Key = key
-	chatgptStage.StageStatus = types.DOCUMENT_STATUS_COMPLETE
-
-	err = cfg.store.UpdateDocumentStage(chatgptStage)
+	err = cfg.store.CompleteDocumentStage(chatgptStage)
 	if err != nil {
 		slog.Error("Failed to update the processing stage as complete", "error", err)
 		return ret, err
