@@ -34,10 +34,10 @@ var (
 )
 
 func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
-	slog.Info(">>chatgptLambda.process")
-	defer slog.Info("<<chatgptLambda.process")
+	slog.Debug(">>process")
+	defer slog.Debug("<<process")
 
-	slog.Info("chatgptLambda process input", "input", event)
+	slog.Info("chatgptLambda stage input", "event", event)
 
 	ret := types.DocumentStep{}
 
@@ -57,7 +57,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 
 	chatgptStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_CHATGPT, prevStage.OriginalFileName)
 	if err != nil {
-		slog.Error("Failed to save the document processing stage", "error", err)
+		slog.Error("Failed to save the document processing stage", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
@@ -66,7 +66,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 		Key:    aws.String(prevStage.S3Key),
 	})
 	if err != nil {
-		slog.Error("Failed to get the document from S3", "error", err)
+		slog.Error("Failed to get the document from S3", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
@@ -77,7 +77,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 
 	content, err := io.ReadAll(resp.Body)
 	if err != err {
-		slog.Error("Failed to read the input document to clean up", "error", err)
+		slog.Error("Failed to read the input document to clean up", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
@@ -98,7 +98,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 		},
 	)
 	if err != nil {
-		slog.Error("ChatGPT API error", "error", err)
+		slog.Error("ChatGPT API error", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
@@ -127,14 +127,14 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 		ContentLength: aws.Int64(int64(len(body))),
 	})
 	if err != nil {
-		slog.Error("Failed to save the document in the S3 bucket", "key", chatgptStage.S3Key, "error", err)
+		slog.Error("Failed to save the document in the S3 bucket", "docName", prevStage.OriginalFileName, "key", chatgptStage.S3Key, "error", err)
 		return ret, err
 	}
 
 	// Update the stage to complete
 	err = cfg.store.CompleteDocumentStage(chatgptStage)
 	if err != nil {
-		slog.Error("Failed to update the processing stage as complete", "error", err)
+		slog.Error("Failed to update the processing stage as complete", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
@@ -142,7 +142,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	ret.ID = event.ID
 	ret.Stage = types.DOCUMENT_STAGE_CHATGPT
 
-	slog.Info("chatgptLambda process output", "docs", ret)
+	slog.Info("chatgptLambda stage output", "event", ret)
 
 	return ret, nil
 }
@@ -205,8 +205,8 @@ func init() {
 }
 
 func main() {
-	slog.Info(">>chatgptLambda.main")
-	defer slog.Info("<<chatgptLambda.main")
+	slog.Debug(">>main")
+	defer slog.Debug("<<main")
 
 	lambda.Start(cfg.process)
 }

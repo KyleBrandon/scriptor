@@ -220,10 +220,10 @@ func (cfg *mathpixConfig) sendDocumentToMathpix(prevStage types.DocumentProcessi
 }
 
 func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
-	slog.Info(">>mathpixLambda.process")
-	defer slog.Info("<<mathpixLambda.process")
+	slog.Debug(">>process")
+	defer slog.Debug("<<process")
 
-	slog.Info("mathpixLambda process input", "input", event)
+	slog.Info("mathpixLambda stage input", "event", event)
 
 	ret := types.DocumentStep{}
 
@@ -241,30 +241,32 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 		return ret, err
 	}
 
+	slog.Info("process document", "docName", prevStage.OriginalFileName)
+
 	// create the mathpix stage entry
 	mathpixStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_MATHPIX, prevStage.OriginalFileName)
 	if err != nil {
-		slog.Error("Failed to start the Mathpix document processing stage", "error", err)
+		slog.Error("Failed to start the Mathpix document processing stage", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
 	// Upload PDF to Mathpix
 	pdfID, err := cfg.sendDocumentToMathpix(prevStage)
 	if err != nil {
-		slog.Error("Error uploading PDF", "error", err)
+		slog.Error("Error uploading PDF", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
 	// Poll for results
 	err = cfg.pollForResults(pdfID)
 	if err != nil {
-		slog.Error("Error getting results", "error", err)
+		slog.Error("Error getting results", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
 	body, err := cfg.queryConversionResults(pdfID)
 	if err != nil {
-		slog.Error("Failed to query conversion results", "error", err)
+		slog.Error("Failed to query conversion results", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 
 	}
@@ -282,7 +284,7 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 		ContentLength: aws.Int64(int64(len(body))),
 	})
 	if err != nil {
-		slog.Error("Failed to save the document in the S3 bucket", "key", mathpixStage.S3Key, "error", err)
+		slog.Error("Failed to save the document in the S3 bucket", "docName", prevStage.OriginalFileName, "key", mathpixStage.S3Key, "error", err)
 		return ret, err
 	}
 
@@ -290,13 +292,15 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 
 	err = cfg.store.CompleteDocumentStage(mathpixStage)
 	if err != nil {
-		slog.Error("Failed to update the processing stage as complete", "error", err)
+		slog.Error("Failed to update the processing stage as complete", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
 	// pass the step info to the next stage
 	ret.ID = event.ID
 	ret.Stage = types.DOCUMENT_STAGE_MATHPIX
+
+	slog.Info("mathpixLambda stage output", "event", ret)
 
 	return ret, nil
 }
@@ -328,8 +332,8 @@ func getMathpixKeys() (*types.MathpixSecrets, error) {
 }
 
 func init() {
-	slog.Debug(">>mathpixLambda.init")
-	defer slog.Debug("<<mathpixLambda.init")
+	slog.Debug(">>init")
+	defer slog.Debug("<<init")
 
 	awsCfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
@@ -362,8 +366,8 @@ func init() {
 }
 
 func main() {
-	slog.Info(">>mathpixLambda.main")
-	defer slog.Info("<<mathpixLambda.main")
+	slog.Debug(">>main")
+	defer slog.Debug("<<main")
 
 	lambda.Start(cfg.process)
 }

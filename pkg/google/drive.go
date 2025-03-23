@@ -219,12 +219,15 @@ func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {
 
 	register := make([]types.WatchChannel, 0)
 
-	// look for any channels that have expired
-	channelRegisterTime := time.Now().Add(-1 * time.Hour).UnixMilli()
+	// We want to check if a watch channel is set to expire now or in the next 4 hours
+	// The reason being is that the we only check every 4 hours and the channels are set
+	// to expire in 48 hours.  We don't want to miss a channel expiring
+	channelRegisterTime := time.Now().Add(4 * time.Hour).UnixMilli()
 	for _, wc := range watchChannels {
+		slog.Info("check watch channel for renewal", "channel", wc.ChannelID, "currentTime", channelRegisterTime, "channelExpires", wc.ExpiresAt, "currentURL", url, "channelURL", wc.WebhookUrl)
 		if wc.ExpiresAt <= channelRegisterTime || wc.WebhookUrl != url {
 			// we need to re-register this channel
-			slog.Info("channel is not expired and the webhook URL has not changed")
+			slog.Info("channel has expired or the webhook URL has changed")
 			register = append(register, wc)
 		}
 	}
@@ -248,6 +251,7 @@ func (gd *GoogleDriveContext) createWatchChannel(wc types.WatchChannel, url stri
 	slog.Info(">>createWatchChannel")
 	defer slog.Info("<<createWatchChannel")
 
+	// Set the watch channel to expire in 2 days
 	wc.ChannelID = uuid.New().String()
 	wc.ExpiresAt = time.Now().Add(48 * time.Hour).UnixMilli()
 	wc.WebhookUrl = url

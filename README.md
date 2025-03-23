@@ -38,30 +38,66 @@ This final step in the state machine will upload the final ChatGPT cleaned Markd
 
 The following secrets need to be configured in AWS Secrets Manager. These are configured in AWS as "Other type of secret" and stored as key/value pairs.
 
-#### `scriptor/google-service`
+#### scriptor/google-folder-defaults
 
-This contains the service key from Google Drive
-
-You get this service key by ...
-
-You must grant the service key permissions to the folders below
-
-#### `scriptor/google-folder-defaults`
-
-This contains the Google Drive folder identifiers that are used to monitor for and store the documents. The following key/value pairs must be configured:
+This contains the Google Drive folder identifiers that are used to monitor for and store the documents. In your Google Drive account create a folder called **Scriptor**. This is your Scriptor Root Folder and will be used as the root folder to contain all the documents that Scriptor works with. ;aThe following key/value pairs must be configured:a
 
 - `folder_id`: "identifier of the folder to watch for PDF files"
 - `archive_folder_id`: "identifier of the folder to archive PDF files that have been processed"
 - `destination_folder_id`: "identifier of the folder to copy the PDF and Markdown conversion"
 
-#### `scriptor/mathpix`
+#### scriptor/google-service
+
+This contains the service key from Google Drive. In order to obtain a service key for Google Drive you will need to create a Service Account, enable the Google Drive API, and grant the Service Account Permissions to the folders that Scriptor will monitor. The steps below will walk you through creating a service account in Google Cloud to monitor the Scriptor folder. You will need to create a new secret in Secrets Manager of "Other type of secret" and copy the JSON key file from Google Cloud into the **Plaintext** section of the **Key/value pairs**.
+
+#### Step 1: Create a Service Account in Google Cloud
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com).
+2. Select your project or create a new one.
+3. Navigate to **IAM & Admin → Service Accounts**.
+4. Click **Create Service Account**.
+5. Enter a **name** and **description** for the service account.
+6. Click **Create and Continue**
+7. Assign the necessary **roles** you would like the service account to have e.g. Editor.
+8. Click **Done**
+
+#### Step 2: Generate a Service Account Key
+
+1. In the **Service Accounts** page, find the newly created service account.
+2. Click on the account to open details.
+3. Navigate to the **Keys** tab.
+4. Click **Add Key → Create New Key**.
+5. Select **JSON** as the key type and click **Continue**.
+6. A JSON file containing the credentials will be downloaded.
+7. **PROTECT THIS KEY**
+
+#### Step 3: Enable Google Drive API
+
+1. Go to the **APIs & Services → Library**.
+2. Search for **Google Drive API**.
+3. Click **Enable**.
+
+#### Step 4: Share Your Google Drive folder with the Service Account
+
+1. Open your **Google Drive**.
+2. Right-click on the folder or file you want to share.
+3. Click **Share**.
+4. Add the **service account's email** (e.g. file-monitor@my-new-project-12345.iam.gserviceaccount.com).
+5. Assign **Editor** permissions as Scriptor will need to create and move documents.
+6. Click **Done**.
+
+#### scriptor/mathpix
 
 This contains the Mathpix App ID and App Key that are used to call the Mathpix API.
 
-- `mathpix_app_id`: ""
-- `mathpix_app_key`: ""
+Head to mathpix.com, hit “Try for Free” and make an account. Once you log in, select "Go to Console" to manage the API, we're not using their other note taking features. Select the menu option "Convert" at the top of the screen and create an Organization. We want the "Pay as you go" billing. There is a one time ~$20 setup fee, but they give you ~$30 in credit for testing. Once you set up your billing, you should see a section under your organization for API keys. Scriptor will want to use the "APP ID" and the "APP KEY". There is a guide for getting a Mathpix API key here https://mathpix.com/docs/convert/creating-an-api-key.
 
-#### `scriptor/chatgpt`
+You will want to create a Secrets Manager secret titled `scriptor/mathpix` with the following key/values:
+
+- `mathpix_app_id`: "<Your APP ID from Mathix>"
+- `mathpix_app_key`: "<Your APP KEY from Mathpix>"
+
+#### scriptor/chatgpt
 
 This contains the ChatGPT API key:
 

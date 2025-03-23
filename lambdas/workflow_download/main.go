@@ -105,6 +105,7 @@ func (cfg *downloadConfig) processDocuments(documents []*types.Document) error {
 
 	// loop through the documents that have been uploaded
 	for _, document := range documents {
+		slog.Info("process document", "docName", document.Name)
 
 		// Save the Google Drive document information
 		err := cfg.store.InsertDocument(*document)
@@ -116,7 +117,7 @@ func (cfg *downloadConfig) processDocuments(documents []*types.Document) error {
 		// Start document stage to in-progress
 		stage, err := cfg.store.StartDocumentStage(document.ID, types.DOCUMENT_STAGE_DOWNLOADED, document.Name)
 		if err != nil {
-			slog.Error("Failed to save the document processing stage", "error", err)
+			slog.Error("Failed to save the document processing stage", "docName", document.Name, "error", err)
 			return err
 		}
 
@@ -129,15 +130,17 @@ func (cfg *downloadConfig) processDocuments(documents []*types.Document) error {
 		// update the document stage to complete
 		err = cfg.store.CompleteDocumentStage(stage)
 		if err != nil {
-			slog.Error("Failed to update the processing stage as complete", "error", err)
+			slog.Error("Failed to update the processing stage as complete", "docName", document.Name, "error", err)
 			return err
 		}
 
 		input, err := util.BuildStageInput(document.ID, types.DOCUMENT_STAGE_DOWNLOADED)
 		if err != nil {
-			slog.Error("Failed to build the stage input for the next stage", "error", err)
+			slog.Error("Failed to build the stage input for the next stage", "docName", document.Name, "error", err)
 			return err
 		}
+
+		slog.Info("downloadLambda stage output", "event", input)
 
 		// start the state machine execution
 		_, err = sfnClient.StartExecution(context.TODO(), &sfn.StartExecutionInput{
@@ -146,7 +149,7 @@ func (cfg *downloadConfig) processDocuments(documents []*types.Document) error {
 		})
 
 		if err != nil {
-			slog.Error("Failed to start the state machine execution", "error", err)
+			slog.Error("Failed to start the state machine execution", "docName", document.Name, "error", err)
 			return err
 		}
 	}
@@ -202,8 +205,8 @@ func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProx
 }
 
 func init() {
-	slog.Info(">>downloadLambda.init")
-	defer slog.Info("<<downloadLambda.init")
+	slog.Debug(">>init")
+	defer slog.Debug("<<init")
 
 	var err error
 	cfg = &downloadConfig{}
@@ -225,8 +228,8 @@ func init() {
 }
 
 func main() {
-	slog.Info(">>downloadLambda.main")
-	defer slog.Info("<<downloadLambda.main")
+	slog.Debug(">>main")
+	defer slog.Debug("<<main")
 
 	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 		return cfg.processFileNotification(request)

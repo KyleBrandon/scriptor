@@ -65,10 +65,10 @@ func (cfg *uploadConfig) saveStageToFolder(docStage types.DocumentProcessingStag
 }
 
 func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentStep) error {
-	slog.Info(">>uploadLambda.process")
-	defer slog.Info("<<uploadLambda.process")
+	slog.Debug(">>process")
+	defer slog.Debug("<<process")
 
-	slog.Info("uploadLambda process input", "input", event)
+	slog.Info("uploadLambda stage input", "input", event)
 
 	var err error
 	cfg.store, err = util.VerifyStoreConnection(cfg.store)
@@ -143,12 +143,14 @@ func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentStep) 
 		return err
 	}
 
+	slog.Info("uploadLambda stage complete")
+
 	return nil
 }
 
 func init() {
-	slog.Info(">>uploadLambda.init")
-	defer slog.Info("<<uploadLambda.init")
+	slog.Debug(">>init")
+	defer slog.Debug("<<init")
 
 	awsCfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
@@ -181,8 +183,8 @@ func init() {
 }
 
 func main() {
-	slog.Info(">>uploadLambda.main")
-	defer slog.Info("<<uploadLambda.main")
+	slog.Debug(">>main")
+	defer slog.Debug("<<main")
 
 	lambda.Start(cfg.process)
 }

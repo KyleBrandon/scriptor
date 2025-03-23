@@ -1,16 +1,13 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/google"
 	"github.com/KyleBrandon/scriptor/pkg/types"
-	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
@@ -20,56 +17,11 @@ type registerConfig struct {
 	webhookURL string
 }
 
-func main() {
-	slog.Info(">>RegisterWebhook.main")
-	defer slog.Info("<<RegisterWebhook.main")
-
-	store, err := database.NewDynamoDBClient()
-	if err != nil {
-		slog.Error("Failed to configure the DynamoDB client", "error", err)
-		os.Exit(1)
-	}
-
-	dc, err := google.NewGoogleDrive(store)
-	if err != nil {
-		//
-		slog.Error("failed to initialize the Google Drive service context", "error", err)
-		os.Exit(1)
-	}
-
-	webhookURL := os.Getenv("WEBHOOK_URL")
-	if webhookURL == "" {
-		slog.Error("webhook URL not configured")
-		os.Exit(1)
-	}
-
-	cfg := &registerConfig{
-		store,
-		dc,
-		webhookURL}
-
-	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-		slog.Info(">>RegisterWebhook.lambda")
-		defer slog.Info("<<RegisterWebhook.lambda")
-
-		err = cfg.seedWatchChannels()
-		if err != nil {
-			slog.Error("Failed to add initial watch channel", "error", err)
-		}
-
-		err := cfg.dc.ReRegisterWebhook(cfg.webhookURL)
-		if err != nil {
-			message := fmt.Sprintf("failed to re-register webhook: %v", err)
-			return util.BuildGatewayResponse(message, http.StatusOK)
-		}
-
-		return util.BuildGatewayResponse("successfully re-regisered webhook", http.StatusOK)
-	})
-}
+var cfg *registerConfig
 
 func (cfg *registerConfig) seedWatchChannels() error {
-	slog.Info(">>seedWatchChannels")
-	defer slog.Info("<<seedWatchChannels")
+	slog.Debug(">>seedWatchChannels")
+	defer slog.Debug("<<seedWatchChannels")
 
 	// get all the watch channels
 	existing, err := cfg.store.GetWatchChannels()
@@ -80,7 +32,7 @@ func (cfg *registerConfig) seedWatchChannels() error {
 
 	// do we have any watch channels configured
 	if len(existing) != 0 {
-		slog.Info("No need to seed a watch channel, already configured")
+		slog.Debug("No need to seed a watch channel, already configured")
 		return nil
 	}
 
@@ -103,4 +55,56 @@ func (cfg *registerConfig) seedWatchChannels() error {
 	}
 
 	return nil
+}
+
+func (cfg *registerConfig) registerWebhook() {
+	slog.Debug(">>registerWebhook")
+	defer slog.Debug("<<registerWebhook")
+
+	err := cfg.seedWatchChannels()
+	if err != nil {
+		slog.Error("Failed to add initial watch channel", "error", err)
+	}
+
+	err = cfg.dc.ReRegisterWebhook(cfg.webhookURL)
+	if err != nil {
+		slog.Error("Failled to re-register webhook", "error", err)
+		return
+	}
+}
+
+func init() {
+	slog.Debug(">>init")
+	defer slog.Debug("<<init")
+
+	store, err := database.NewDynamoDBClient()
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		os.Exit(1)
+	}
+
+	dc, err := google.NewGoogleDrive(store)
+	if err != nil {
+		//
+		slog.Error("failed to initialize the Google Drive service context", "error", err)
+		os.Exit(1)
+	}
+
+	webhookURL := os.Getenv("WEBHOOK_URL")
+	if webhookURL == "" {
+		slog.Error("webhook URL not configured")
+		os.Exit(1)
+	}
+
+	cfg = &registerConfig{
+		store,
+		dc,
+		webhookURL}
+}
+
+func main() {
+	slog.Debug(">>main")
+	defer slog.Debug("<<main")
+
+	lambda.Start(cfg.registerWebhook)
 }
