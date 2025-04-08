@@ -50,7 +50,7 @@ type (
 	}
 
 	mathpixConfig struct {
-		store         database.ScriptorStore
+		store         database.DocumentStore
 		s3Client      *s3.Client
 		mathpixAppID  string
 		mathpixAppKey string
@@ -157,7 +157,7 @@ func (cfg *mathpixConfig) queryConversionResults(pdfID string) ([]byte, error) {
 	return body, nil
 }
 
-func (cfg *mathpixConfig) sendDocumentToMathpix(prevStage types.DocumentProcessingStage) (string, error) {
+func (cfg *mathpixConfig) sendDocumentToMathpix(prevStage *types.DocumentProcessingStage) (string, error) {
 	// get the input file form S3
 	resp, err := cfg.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String(types.S3_BUCKET_NAME),
@@ -223,28 +223,24 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
-	slog.Info("mathpixLambda stage input", "event", event)
-
 	ret := types.DocumentStep{}
 
 	var err error
-	cfg.store, err = util.VerifyStoreConnection(cfg.store)
+	cfg.store, err = util.VerifyDocumentStore(cfg.store)
 	if err != nil {
 		slog.Error("Failed to verify the DynamoDB client", "error", err)
 		return ret, err
 	}
 
 	// query the previous stage information
-	prevStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
+	prevStage, err := cfg.store.GetDocumentStage(event.DocumentID, event.Stage)
 	if err != nil {
-		slog.Error("Failed to get the previous stage information", "id", event.ID, "stage", event.Stage, "error", err)
+		slog.Error("Failed to get the previous stage information", "id", event.DocumentID, "stage", event.Stage, "error", err)
 		return ret, err
 	}
 
-	slog.Info("process document", "docName", prevStage.OriginalFileName)
-
 	// create the mathpix stage entry
-	mathpixStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_MATHPIX, prevStage.OriginalFileName)
+	mathpixStage, err := cfg.store.StartDocumentStage(event.DocumentID, types.DOCUMENT_STAGE_MATHPIX, prevStage.OriginalFileName)
 	if err != nil {
 		slog.Error("Failed to start the Mathpix document processing stage", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
@@ -274,6 +270,7 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 	// Get the original document name w/o extension
 	documentName := util.GetDocumentName(prevStage.OriginalFileName)
 
+	// Save mathpix markdown to S3
 	mathpixStage.StageFileName = fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
 	mathpixStage.S3Key = fmt.Sprintf("%s/%s", mathpixStage.Stage, mathpixStage.StageFileName)
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
@@ -297,10 +294,8 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	// pass the step info to the next stage
-	ret.ID = event.ID
+	ret.DocumentID = event.DocumentID
 	ret.Stage = types.DOCUMENT_STAGE_MATHPIX
-
-	slog.Info("mathpixLambda stage output", "event", ret)
 
 	return ret, nil
 }
@@ -341,12 +336,6 @@ func init() {
 		os.Exit(1)
 	}
 
-	store, err := database.NewDynamoDBClient()
-	if err != nil {
-		slog.Error("Failed to configure the DynamoDB client", "error", err)
-		os.Exit(1)
-	}
-
 	mathpixKeys, err := getMathpixKeys()
 	if err != nil {
 		slog.Error("Failed to get the Mathpix keys", "error", err)
@@ -358,10 +347,9 @@ func init() {
 	s3Client := s3.NewFromConfig(awsCfg)
 
 	cfg = &mathpixConfig{
-		store,
-		s3Client,
-		mathpixAppID,
-		mathpixAppKey,
+		s3Client:      s3Client,
+		mathpixAppID:  mathpixAppID,
+		mathpixAppKey: mathpixAppKey,
 	}
 }
 

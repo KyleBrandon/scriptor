@@ -22,11 +22,11 @@ func BuildGatewayResponse(message string, statusCode int) (events.APIGatewayProx
 	}, nil
 }
 
-func BuildStageInput(id, stage string) (string, error) {
+func BuildStepInput(id, stage string) (string, error) {
 	// Start the state machine with the document id and stage
 	input := types.DocumentStep{
-		ID:    id,
-		Stage: stage,
+		DocumentID: id,
+		Stage:      stage,
 	}
 
 	inputJSON, err := json.Marshal(input)
@@ -87,13 +87,14 @@ func GetDefaultFolderLocations() (*types.GoogleFolderDefaultLocations, error) {
 	return &folderLocations, nil
 }
 
+// TODO:  Clean these Verify*** methods up, use a generic or function pointer for the new store
 // Verify the DynamoDB storage connection and create a new one if it has been closed for any reason.
-func VerifyStoreConnection(store database.ScriptorStore) (database.ScriptorStore, error) {
+func VerifyWatchChannelStore(store database.WatchChannelStore) (database.WatchChannelStore, error) {
 	var err error
 
 	// if we do not have a store initialized, then create one
 	if store == nil {
-		store, err = database.NewDynamoDBClient()
+		store, err = database.NewWatchChannelStore()
 		if err != nil {
 			slog.Error("Failed to configure the DynamoDB client", "error", err)
 			return nil, err
@@ -105,7 +106,34 @@ func VerifyStoreConnection(store database.ScriptorStore) (database.ScriptorStore
 	// make sure we can query the database
 	if err = store.Ping(); err != nil {
 		// create
-		store, err = database.NewDynamoDBClient()
+		store, err = database.NewWatchChannelStore()
+		if err != nil {
+			slog.Error("Failed to configure the DynamoDB client", "error", err)
+			return nil, err
+		}
+	}
+
+	return store, nil
+}
+
+func VerifyDocumentStore(store database.DocumentStore) (database.DocumentStore, error) {
+	var err error
+
+	// if we do not have a store initialized, then create one
+	if store == nil {
+		store, err = database.NewDocumentStore()
+		if err != nil {
+			slog.Error("Failed to configure the DynamoDB client", "error", err)
+			return nil, err
+		}
+
+		return store, nil
+	}
+
+	// make sure we can query the database
+	if err = store.Ping(); err != nil {
+		// create
+		store, err = database.NewDocumentStore()
 		if err != nil {
 			slog.Error("Failed to configure the DynamoDB client", "error", err)
 			return nil, err
@@ -116,10 +144,10 @@ func VerifyStoreConnection(store database.ScriptorStore) (database.ScriptorStore
 }
 
 // Verify the Google Drive service connection and create a new one if it is not valid.
-func VerifyDriveContext(driveContext *google.GoogleDriveContext, store database.ScriptorStore) (*google.GoogleDriveContext, error) {
+func VerifyDriveContext(driveContext *google.GoogleDriveContext) (*google.GoogleDriveContext, error) {
 	if driveContext == nil {
 		var err error
-		driveContext, err = google.NewGoogleDrive(store)
+		driveContext, err = google.NewGoogleDrive()
 		if err != nil {
 			//
 			slog.Error("Failed to initialize the Google Drive service context", "error", err)

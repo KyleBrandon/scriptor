@@ -23,7 +23,7 @@ import (
 )
 
 type chatgptConfig struct {
-	store    database.ScriptorStore
+	store    database.DocumentStore
 	s3Client *s3.Client
 	apiKey   string
 }
@@ -33,29 +33,41 @@ var (
 	cfg        *chatgptConfig
 )
 
+const (
+	SYSTEM_MESSAGE = "You are an AI that processes Markdown text. Your task is to clean up the input by fixing Markdown syntax, correcting spelling and grammar, and ensuring proper formatting. Do NOT include any extra explanations, comments, or surrounding text—only return the valid Markdown output."
+	CHAT_PROMPT    = "Here is a Markdown file that was generated via OCR. Fix the Markdown formatting, correct any spelling and grammar errors, and ensure the syntax is valid. Do not add any explanations,comments, and do not surround the document text in a markdown code block. ONLY RETURN THE CLEANED MARKDOWN CONTENT AND NOTHING ELSE:\n\n%s"
+
+	HEADER_TEMPLATE = `---
+id: "%s"
+aliases: []
+tags:
+  - daily-notes
+---
+`
+	FOOTER_TEMPLATE = "![[/Users/kyle.brandon/journal/attachments/%s]]"
+)
+
 func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
-	slog.Info("chatgptLambda stage input", "event", event)
-
 	ret := types.DocumentStep{}
 
 	var err error
-	cfg.store, err = util.VerifyStoreConnection(cfg.store)
+	cfg.store, err = util.VerifyDocumentStore(cfg.store)
 	if err != nil {
 		slog.Error("Failed to verify the DynamoDB client", "error", err)
 		return ret, err
 	}
 
 	// query the previous stage information
-	prevStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
+	prevStage, err := cfg.store.GetDocumentStage(event.DocumentID, event.Stage)
 	if err != nil {
-		slog.Error("Failed to get the previous stage information", "id", event.ID, "stage", event.Stage, "error", err)
+		slog.Error("Failed to get the previous stage information", "id", event.DocumentID, "stage", event.Stage, "error", err)
 		return ret, err
 	}
 
-	chatgptStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_CHATGPT, prevStage.OriginalFileName)
+	chatgptStage, err := cfg.store.StartDocumentStage(event.DocumentID, types.DOCUMENT_STAGE_CHATGPT, prevStage.OriginalFileName)
 	if err != nil {
 		slog.Error("Failed to save the document processing stage", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
@@ -82,8 +94,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	// // Create a prompt for GPT to clean up the Markdown
-	systemMessage := "You are an AI that processes Markdown text. Your task is to clean up the input by fixing Markdown syntax, correcting spelling and grammar, and ensuring proper formatting. Do NOT include any extra explanations, comments, or surrounding text—only return the valid Markdown output."
-	prompt := fmt.Sprintf("Here is a Markdown file that was generated via OCR. Fix the Markdown formatting, correct any spelling and grammar errors, and ensure the syntax is valid. Do not add any explanations,comments, and do not surround the document text in a markdown code block. ONLY RETURN THE CLEANED MARKDOWN CONTENT AND NOTHING ELSE:\n\n%s", content)
+	prompt := fmt.Sprintf(CHAT_PROMPT, content)
 
 	// // Call the ChatGPT API
 	gptResp, err := client.CreateChatCompletion(
@@ -91,7 +102,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 		openai.ChatCompletionRequest{
 			Model: openai.GPT4o,
 			Messages: []openai.ChatCompletionMessage{
-				{Role: "system", Content: systemMessage},
+				{Role: "system", Content: SYSTEM_MESSAGE},
 				{Role: "user", Content: prompt},
 			},
 			Temperature: 0.2, // Keep responses precise
@@ -110,13 +121,22 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	// If so, remove it.
 	cleanedMarkdown := strings.TrimPrefix(strings.TrimSuffix(string(buffer), "```"), "```markdown")
 
+	// TODO: This should be a configuration
+	// build the header and footer for the note
+	header := fmt.Sprintf(HEADER_TEMPLATE, util.GetDocumentName(prevStage.OriginalFileName))
+	footer := fmt.Sprintf(FOOTER_TEMPLATE, prevStage.OriginalFileName)
+
+	// We want to append a link to the original scanned PDF at the end of the note
+	output := fmt.Sprintf("%s\n\n%s\n\n%s", header, cleanedMarkdown, footer)
+
+	// get the bytes for the markdown file
+	body := []byte(output)
+
 	// Get the original document name w/o extension
 	documentName := util.GetDocumentName(prevStage.OriginalFileName)
 
 	chatgptStage.StageFileName = fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
 	chatgptStage.S3Key = fmt.Sprintf("%s/%s", chatgptStage.Stage, chatgptStage.StageFileName)
-
-	body := []byte(cleanedMarkdown)
 
 	//
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
@@ -139,10 +159,8 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	// read doc from bucket
-	ret.ID = event.ID
+	ret.DocumentID = event.DocumentID
 	ret.Stage = types.DOCUMENT_STAGE_CHATGPT
-
-	slog.Info("chatgptLambda stage output", "event", ret)
 
 	return ret, nil
 }
@@ -183,12 +201,6 @@ func init() {
 		os.Exit(1)
 	}
 
-	store, err := database.NewDynamoDBClient()
-	if err != nil {
-		slog.Error("Failed to configure the DynamoDB client", "error", err)
-		os.Exit(1)
-	}
-
 	apiKey, err := getChatgptKeys()
 	if err != nil {
 		slog.Error("Failed to get the ChatGPT keys", "error", err)
@@ -198,9 +210,8 @@ func init() {
 	s3Client := s3.NewFromConfig(awsCfg)
 
 	cfg = &chatgptConfig{
-		store,
-		s3Client,
-		apiKey,
+		s3Client: s3Client,
+		apiKey:   apiKey,
 	}
 }
 

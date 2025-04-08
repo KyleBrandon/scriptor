@@ -29,7 +29,10 @@ const (
 	//
 
 	// Document downloaded to S3
-	DOCUMENT_STAGE_DOWNLOADED = "downloaded"
+	DOCUMENT_STAGE_NEW = "new"
+
+	// Document downloaded to S3
+	DOCUMENT_STAGE_DOWNLOAD = "downloaded"
 
 	// Document stage Mathpix
 	DOCUMENT_STAGE_MATHPIX = "mathpix"
@@ -91,6 +94,20 @@ type (
 		WebhookUrl          string    `dynamodbav:"webhook_url"`
 	}
 
+	// WatchChannelLock is used to lock a watch channel for querying changes
+	WatchChannelLock struct {
+		ChannelID         string `dynamodbav:"channel_id"`
+		ChangesStartToken string `dynamodbav:"changes_start_token"`
+		Locked            bool   `dynmodbav:"locked"`
+		LockExpires       int64  `dynamodbav:"lock_expires"`
+	}
+
+	// Used to send an SQS notification that there are changes on a channel
+	ChannelNotification struct {
+		ChannelID string `json:"channel_id"`
+		FolderID  string `json:"folder_id"`
+	}
+
 	// Document state as it is being converted.
 	Document struct {
 		// ID is the partition key for the documents table
@@ -103,20 +120,26 @@ type (
 		ModifiedTime   time.Time `dynamodbav:"modified_time"`
 	}
 
+	DocumentChanges struct {
+		Documents      []*Document
+		NextStartToken string
+	}
+
 	// DocumentProcessingStage tracks the document through each stage of processing.
 	DocumentProcessingStage struct {
 		ID               string    `dynamodbav:"id"`
 		Stage            string    `dynamodbav:"stage"`
 		StageStatus      string    `dynamodbav:"stage_status"`
-		StartedAt        time.Time `dynamodbav:"created_at"`
-		CompletedAt      time.Time `dynamodbav:"created_at"`
+		StartedAt        time.Time `dynamodbav:"started_at"`
+		CompletedAt      time.Time `dynamodbav:"completed_at"`
 		OriginalFileName string    `dynamodbav:"original_file_name"`
 		StageFileName    string    `dynamodbav:"file_name"`
 		S3Key            string    `dynamodbav:"s3key"`
 	}
 
+	// TODO: Rethink this
 	DocumentStep struct {
-		ID    string `json:"id"`
-		Stage string `json:"stage"`
+		DocumentID string `json:"id"`
+		Stage      string `json:"stage"`
 	}
 )
