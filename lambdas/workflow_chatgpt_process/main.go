@@ -3,12 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
@@ -17,20 +16,20 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/sashabaranov/go-openai"
 )
 
-type chatgptConfig struct {
-	store    database.DocumentStore
-	s3Client *s3.Client
-	apiKey   string
+type handlerConfig struct {
+	store         database.DocumentStore
+	s3Client      *s3.Client
+	chatgptClient *openai.Client
 }
 
 var (
 	BucketName string = types.S3_BUCKET_NAME
-	cfg        *chatgptConfig
+	initOnce   sync.Once
+	cfg        *handlerConfig
 )
 
 const (
@@ -47,33 +46,74 @@ tags:
 	FOOTER_TEMPLATE = "![[/Users/kyle.brandon/journal/attachments/%s]]"
 )
 
-func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
+// Load all the inital configuration settings for the lambda
+func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
+
+	cfg = &handlerConfig{}
+
+	var err error
+
+	cfg.store, err = database.NewDocumentStore(ctx)
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		return nil, err
+	}
+
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		slog.Error("Failed to load the AWS config", "error", err)
+		return nil, err
+	}
+
+	cfg.s3Client = s3.NewFromConfig(awsCfg)
+
+	cfg.chatgptClient, err = util.CreateChatGPTClient(ctx, awsCfg)
+	if err != nil {
+		slog.Error("Failed to create a client to the ChatGPT API", "error", err)
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+// Ensure that the configuration settings are only loaded once
+func initLambda(ctx context.Context) error {
+	var err error
+	initOnce.Do(func() {
+		slog.Debug(">>initLambda")
+		defer slog.Debug("<<initLambda")
+
+		cfg, err = loadConfiguration(ctx)
+	})
+
+	return err
+}
+
+func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
 	ret := types.DocumentStep{}
 
-	var err error
-	cfg.store, err = util.VerifyDocumentStore(cfg.store)
-	if err != nil {
-		slog.Error("Failed to verify the DynamoDB client", "error", err)
+	if err := initLambda(ctx); err != nil {
+		slog.Error("Failed to initialize the lambda", "error", err)
 		return ret, err
 	}
 
 	// query the previous stage information
-	prevStage, err := cfg.store.GetDocumentStage(event.DocumentID, event.Stage)
+	prevStage, err := cfg.store.GetDocumentStage(ctx, event.DocumentID, event.Stage)
 	if err != nil {
 		slog.Error("Failed to get the previous stage information", "id", event.DocumentID, "stage", event.Stage, "error", err)
 		return ret, err
 	}
 
-	chatgptStage, err := cfg.store.StartDocumentStage(event.DocumentID, types.DOCUMENT_STAGE_CHATGPT, prevStage.OriginalFileName)
+	chatgptStage, err := cfg.store.StartDocumentStage(ctx, event.DocumentID, types.DOCUMENT_STAGE_CHATGPT, prevStage.OriginalFileName)
 	if err != nil {
 		slog.Error("Failed to save the document processing stage", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
-	resp, err := cfg.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+	resp, err := cfg.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(types.S3_BUCKET_NAME),
 		Key:    aws.String(prevStage.S3Key),
 	})
@@ -83,9 +123,6 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	defer resp.Body.Close()
-
-	// Initialize OpenAI client
-	client := openai.NewClient(cfg.apiKey)
 
 	content, err := io.ReadAll(resp.Body)
 	if err != err {
@@ -97,8 +134,8 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	prompt := fmt.Sprintf(CHAT_PROMPT, content)
 
 	// // Call the ChatGPT API
-	gptResp, err := client.CreateChatCompletion(
-		context.TODO(),
+	gptResp, err := cfg.chatgptClient.CreateChatCompletion(
+		ctx,
 		openai.ChatCompletionRequest{
 			Model: openai.GPT4o,
 			Messages: []openai.ChatCompletionMessage{
@@ -123,7 +160,7 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 
 	// TODO: This should be a configuration
 	// build the header and footer for the note
-	header := fmt.Sprintf(HEADER_TEMPLATE, util.GetDocumentName(prevStage.OriginalFileName))
+	header := fmt.Sprintf(HEADER_TEMPLATE, util.GetNamePart(prevStage.OriginalFileName))
 	footer := fmt.Sprintf(FOOTER_TEMPLATE, prevStage.OriginalFileName)
 
 	// We want to append a link to the original scanned PDF at the end of the note
@@ -133,13 +170,13 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	body := []byte(output)
 
 	// Get the original document name w/o extension
-	documentName := util.GetDocumentName(prevStage.OriginalFileName)
+	documentName := util.GetNamePart(prevStage.OriginalFileName)
 
 	chatgptStage.StageFileName = fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
 	chatgptStage.S3Key = fmt.Sprintf("%s/%s", chatgptStage.Stage, chatgptStage.StageFileName)
 
 	//
-	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+	_, err = cfg.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
 		Key:           aws.String(chatgptStage.S3Key),
 		Body:          bytes.NewReader(body),
@@ -152,72 +189,23 @@ func (cfg *chatgptConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	// Update the stage to complete
-	err = cfg.store.CompleteDocumentStage(chatgptStage)
+	err = cfg.store.CompleteDocumentStage(ctx, chatgptStage)
 	if err != nil {
 		slog.Error("Failed to update the processing stage as complete", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
 	// read doc from bucket
+	ret.NotificationID = event.NotificationID
 	ret.DocumentID = event.DocumentID
 	ret.Stage = types.DOCUMENT_STAGE_CHATGPT
 
 	return ret, nil
 }
 
-func getChatgptKeys() (string, error) {
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		os.Exit(1)
-	}
-
-	svc := secretsmanager.NewFromConfig(awsCfg)
-
-	secretName := types.CHATGPT_SECRETS
-	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
-
-	result, err := svc.GetSecretValue(context.TODO(), input)
-	if err != nil {
-		return "", err
-	}
-
-	var chatgptSecrets types.ChatGptSecrets
-
-	err = json.Unmarshal([]byte(*result.SecretString), &chatgptSecrets)
-	if err != nil {
-		return "", err
-	}
-
-	return chatgptSecrets.ApiKey, nil
-}
-
-func init() {
-	slog.Debug(">>chatgptLambda.init")
-	defer slog.Debug("<<chatgptLambda.init")
-
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		slog.Error("Failed to load the AWS config", "error", err)
-		os.Exit(1)
-	}
-
-	apiKey, err := getChatgptKeys()
-	if err != nil {
-		slog.Error("Failed to get the ChatGPT keys", "error", err)
-		os.Exit(1)
-	}
-
-	s3Client := s3.NewFromConfig(awsCfg)
-
-	cfg = &chatgptConfig{
-		s3Client: s3Client,
-		apiKey:   apiKey,
-	}
-}
-
 func main() {
 	slog.Debug(">>main")
 	defer slog.Debug("<<main")
 
-	lambda.Start(cfg.process)
+	lambda.Start(process)
 }

@@ -6,9 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -19,28 +21,33 @@ import (
 	"google.golang.org/api/option"
 )
 
-type GoogleDriveContext struct {
-	driveService *drive.Service
-}
+type (
+	GoogleDriveContext struct {
+		ctx          context.Context
+		driveService *drive.Service
+	}
+)
 
 // Create a new Google Drive storage context
-func NewGoogleDrive() (*GoogleDriveContext, error) {
+func NewGoogleDrive(ctx context.Context) (*GoogleDriveContext, error) {
 	slog.Debug(">>GDriveStorageContext.New")
 	defer slog.Debug("<<GDriveStorageContext.New")
 
-	drive := &GoogleDriveContext{}
-	service, err := drive.getDriveService()
+	driveService, err := getDriveService(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	drive.driveService = service
+	drive := &GoogleDriveContext{
+		ctx,
+		driveService,
+	}
 
 	return drive, nil
 }
 
-func getGoogleCredentials() ([]byte, error) {
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+func getGoogleCredentials(ctx context.Context) ([]byte, error) {
+	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		slog.Error("failed to load the AWS config", "error", err)
 		os.Exit(1)
@@ -51,7 +58,7 @@ func getGoogleCredentials() ([]byte, error) {
 	secretName := types.GOOGLE_SERVICE_SECRETS
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
-	result, err := svc.GetSecretValue(context.TODO(), input)
+	result, err := svc.GetSecretValue(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -59,26 +66,26 @@ func getGoogleCredentials() ([]byte, error) {
 	return []byte(*result.SecretString), nil
 }
 
-func (gd *GoogleDriveContext) getDriveService() (*drive.Service, error) {
+func getDriveService(ctx context.Context) (*drive.Service, error) {
 	// Load service account JSON
-	data, err := getGoogleCredentials()
+	data, err := getGoogleCredentials(ctx)
 	if err != nil {
 		slog.Error("Unable to read service account file", "error", err)
 		return nil, err
 	}
 
 	// Authenticate with Google Drive API using Service Account
-	creds, err := google.CredentialsFromJSON(context.TODO(), data, drive.DriveScope)
+	creds, err := google.CredentialsFromJSON(ctx, data, drive.DriveScope)
 	if err != nil {
 		slog.Error("Unable to parse credentials", "error", err)
 		return nil, err
 	}
 
 	// Create an HTTP client using TokenSource
-	client := oauth2.NewClient(context.TODO(), creds.TokenSource)
+	client := oauth2.NewClient(ctx, creds.TokenSource)
 
 	// Create Google Drive service
-	service, err := drive.NewService(context.TODO(), option.WithHTTPClient(client))
+	service, err := drive.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		slog.Error("Unable to create Drive client", "error", err)
 		return nil, err
@@ -108,10 +115,15 @@ func (gd *GoogleDriveContext) QueryChanges(folderID, startToken string) (*types.
 	documents := make([]*types.Document, 0)
 	pageToken := startToken
 
+	seen := make(map[string]bool)
+
 	for pageToken != "" {
 
 		// get the changes since the pageToken
-		changes, err := gd.driveService.Changes.List(pageToken).Fields("newStartPageToken, changes(file(id, name, parents, createdTime, modifiedTime, size))").Do()
+		changes, err := gd.driveService.Changes.
+			List(pageToken).
+			Fields("nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, parents, createdTime, modifiedTime, size))").
+			Do()
 		if err != nil {
 			slog.Error("Failed to query the drive changes using a start token", "folderID", folderID, "startToken", startToken, "error", err)
 			return nil, err
@@ -119,11 +131,26 @@ func (gd *GoogleDriveContext) QueryChanges(folderID, startToken string) (*types.
 
 		// build a Document from each file that's changed
 		for _, change := range changes.Changes {
+			util.Assert(change.FileId, change.File.Id, "expect these to be the same")
 
 			// ignore drive changes
-			if change.ChangeType == "drive" {
+			if change.ChangeType == "drive" || change.Removed || change.File.Trashed {
 				continue
 			}
+
+			// is the file in the folder we're monitoring?
+			if !slices.Contains(change.File.Parents, folderID) {
+				slog.Warn("Document not in the folder we're monitoring", "id", change.File.Id)
+				continue
+			}
+
+			// We deduplicate the change notifications
+			if seen[change.File.Id] {
+				slog.Warn("Already processed document", "id", change.File.Id)
+				continue
+			}
+
+			seen[change.File.Id] = true
 
 			document, err := buildDocument(change.File)
 			if err != nil {
@@ -134,8 +161,9 @@ func (gd *GoogleDriveContext) QueryChanges(folderID, startToken string) (*types.
 			documents = append(documents, document)
 		}
 
-		if changes.NewStartPageToken != "" {
-			startToken = changes.NewStartPageToken
+		if changes.NextPageToken == "" {
+			pageToken = changes.NewStartPageToken
+			break
 		}
 
 		pageToken = changes.NextPageToken
@@ -143,7 +171,7 @@ func (gd *GoogleDriveContext) QueryChanges(folderID, startToken string) (*types.
 
 	dc := &types.DocumentChanges{
 		Documents:      documents,
-		NextStartToken: startToken,
+		NextStartToken: pageToken,
 	}
 
 	return dc, nil

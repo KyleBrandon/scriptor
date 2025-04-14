@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
@@ -10,39 +13,92 @@ import (
 	"github.com/KyleBrandon/scriptor/pkg/google"
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/config"
 )
 
-type registerConfig struct {
-	store      database.WatchChannelStore
-	dc         *google.GoogleDriveContext
-	webhookURL string
+type handlerConfig struct {
+	store           database.WatchChannelStore
+	dc              *google.GoogleDriveContext
+	webhookURL      string
+	folderLocations *types.GoogleFolderDefaultLocations
 }
 
-var cfg *registerConfig
+var (
+	initOnce sync.Once
+	cfg      *handlerConfig
+)
 
-func (cfg *registerConfig) initializeDefaultWatchChannels() ([]*types.WatchChannel, error) {
+// Load all the inital configuration settings for the lambda
+func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
+
+	cfg = &handlerConfig{}
+
+	var err error
+
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		slog.Error("failed to load the AWS config", "error", err)
+		return nil, err
+	}
+
+	cfg.webhookURL = os.Getenv("WEBHOOK_URL")
+	if cfg.webhookURL == "" {
+		return nil, fmt.Errorf("failed to read the webhook URL from the environment")
+	}
+
+	cfg.store, err = database.NewWatchChannelStore(ctx)
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		return nil, err
+	}
+
+	cfg.dc, err = google.NewGoogleDrive(ctx)
+	if err != nil {
+		//
+		slog.Error("Failed to initialize the Google Drive service context", "error", err)
+		return nil, err
+	}
+
+	cfg.folderLocations, err = util.GetDefaultFolderLocations(ctx, awsCfg)
+	if err != nil {
+		slog.Error("Failed to get the default folder locations", "error", err)
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+// Ensure that the configuration settings are only loaded once
+func initLambda(ctx context.Context) error {
+	var err error
+	initOnce.Do(func() {
+		slog.Debug(">>initLambda")
+		defer slog.Debug("<<initLambda")
+
+		cfg, err = loadConfiguration(ctx)
+	})
+
+	return err
+}
+
+func (cfg *handlerConfig) initializeDefaultWatchChannels() ([]*types.WatchChannel, error) {
 	slog.Debug(">>seedWatchChannels")
 	defer slog.Debug("<<seedWatchChannels")
 
 	wcs := make([]*types.WatchChannel, 0)
 
-	folderLocations, err := util.GetDefaultFolderLocations()
-	if err != nil {
-		slog.Error("Failed to get the default folder locations", "error", err)
-		return wcs, err
-	}
-
 	// Create a watch channel entry in the DB
 	wcs = append(wcs, &types.WatchChannel{
-		FolderID:            folderLocations.FolderID,
-		ArchiveFolderID:     folderLocations.ArchiveFolderID,
-		DestinationFolderID: folderLocations.DestFolderID,
+		FolderID:            cfg.folderLocations.FolderID,
+		ArchiveFolderID:     cfg.folderLocations.ArchiveFolderID,
+		DestinationFolderID: cfg.folderLocations.DestFolderID,
+		CreatedAt:           time.Now().UTC(),
 	})
 
 	return wcs, nil
 }
 
-func (cfg *registerConfig) getChannelsToRegister(watchChannels []*types.WatchChannel) ([]*types.WatchChannel, error) {
+func (cfg *handlerConfig) getChannelsToRegister(watchChannels []*types.WatchChannel) ([]*types.WatchChannel, error) {
 
 	register := make([]*types.WatchChannel, 0)
 
@@ -51,10 +107,12 @@ func (cfg *registerConfig) getChannelsToRegister(watchChannels []*types.WatchCha
 	// to expire in 48 hours.  We don't want to miss a channel expiring
 	channelRegisterTime := time.Now().Add(4 * time.Hour).UnixMilli()
 	for _, wc := range watchChannels {
+		expiresTime := time.Unix(wc.ExpiresAt, 0).Format(time.RFC3339)
 		slog.Info("check watch channel for renewal",
 			"channel", wc.ChannelID,
-			"currentTime", channelRegisterTime,
-			"channelExpires", wc.ExpiresAt,
+			"currentTime", time.Now().Format(time.RFC3339),
+			"registerBy", channelRegisterTime,
+			"channelExpires", expiresTime,
 			"currentURL", cfg.webhookURL,
 			"channelURL", wc.WebhookUrl)
 		if wc.ExpiresAt <= channelRegisterTime || wc.WebhookUrl != cfg.webhookURL {
@@ -67,28 +125,19 @@ func (cfg *registerConfig) getChannelsToRegister(watchChannels []*types.WatchCha
 	return register, nil
 }
 
-func (cfg *registerConfig) registerWebhook() {
+func process(ctx context.Context) error {
 	slog.Debug(">>registerWebhook")
 	defer slog.Debug("<<registerWebhook")
 
-	var err error
-
-	// Create a storage client if we don't have one
-	cfg.store, err = util.VerifyWatchChannelStore(cfg.store)
-	if err != nil {
-		os.Exit(1)
+	if err := initLambda(ctx); err != nil {
+		slog.Error("Failed to initialize the lambda", "error", err)
+		return err
 	}
 
-	// Create a Google Drive service if we don't have one
-	cfg.dc, err = util.VerifyDriveContext(cfg.dc)
-	if err != nil {
-		os.Exit(1)
-	}
-
-	watchChannels, err := cfg.store.GetWatchChannels()
+	watchChannels, err := cfg.store.GetWatchChannels(ctx)
 	if err != nil {
 		slog.Error("Failed to get the list of active watch channels", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	var registerWatchChannels []*types.WatchChannel
@@ -98,7 +147,7 @@ func (cfg *registerConfig) registerWebhook() {
 		registerWatchChannels, err = cfg.initializeDefaultWatchChannels()
 		if err != nil {
 			slog.Error("Failed to build the default watch channels", "error", err)
-			os.Exit(1)
+			return err
 		}
 
 	} else {
@@ -106,7 +155,7 @@ func (cfg *registerConfig) registerWebhook() {
 		registerWatchChannels, err = cfg.getChannelsToRegister(watchChannels)
 		if err != nil {
 			slog.Error("Failed to determine which channels to re-register", "error", err)
-			os.Exit(1)
+			return err
 		}
 	}
 
@@ -118,7 +167,7 @@ func (cfg *registerConfig) registerWebhook() {
 		}
 
 		// Update the watch channel in the database
-		err = cfg.store.UpdateWatchChannel(wc)
+		err = cfg.store.UpdateWatchChannel(ctx, wc)
 		if err != nil {
 			slog.Error("Failed to create or update the watch channel", "folderID", wc.FolderID, "channelID", wc.ChannelID, "error", err)
 			continue
@@ -131,32 +180,19 @@ func (cfg *registerConfig) registerWebhook() {
 		}
 
 		// Update/create the watch channel lock
-		err = cfg.store.CreateChangesToken(wc.ChannelID, token)
+		err = cfg.store.CreateChangesToken(ctx, wc.ChannelID, token)
 		if err != nil {
 			slog.Error("Failed to save the changes token for the watch ")
 			continue
 		}
 	}
-}
 
-func init() {
-	slog.Debug(">>init")
-	defer slog.Debug("<<init")
-
-	webhookURL := os.Getenv("WEBHOOK_URL")
-	if webhookURL == "" {
-		slog.Error("webhook URL not configured")
-		os.Exit(1)
-	}
-
-	cfg = &registerConfig{
-		webhookURL: webhookURL,
-	}
+	return nil
 }
 
 func main() {
 	slog.Debug(">>main")
 	defer slog.Debug("<<main")
 
-	lambda.Start(cfg.registerWebhook)
+	lambda.Start(process)
 }

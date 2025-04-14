@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
@@ -16,18 +17,67 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/google/uuid"
 )
 
 type handlerConfig struct {
 	store     database.WatchChannelStore
-	awsCfg    aws.Config
 	sqsClient *sqs.Client
 	queueURL  string
 }
 
-var cfg *handlerConfig
+var (
+	initOnce sync.Once
+	cfg      *handlerConfig
+)
 
-func queryWatchChannelForRequest(request events.APIGatewayProxyRequest) (*types.WatchChannel, error) {
+// Load all the inital configuration settings for the lambda
+func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
+
+	cfg = &handlerConfig{}
+
+	var err error
+
+	// load the SQS URL that was configured
+	cfg.queueURL = os.Getenv("SQS_QUEUE_URL")
+	if cfg.queueURL == "" {
+		slog.Error("SQS URL is not configured")
+		return nil, fmt.Errorf("failed to load the SQS URL fron the environment")
+	}
+
+	cfg.store, err = database.NewWatchChannelStore(ctx)
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		return nil, err
+	}
+
+	// Load the default AWS config
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		slog.Error("Failed to load the AWS config", "error", err)
+		return nil, err
+	}
+
+	// Create an SQS client
+	cfg.sqsClient = sqs.NewFromConfig(awsCfg)
+
+	return cfg, nil
+}
+
+// Ensure that the configuration settings are only loaded once
+func initLambda(ctx context.Context) error {
+	var err error
+	initOnce.Do(func() {
+		slog.Debug(">>initLambda")
+		defer slog.Debug("<<initLambda")
+
+		cfg, err = loadConfiguration(ctx)
+	})
+
+	return err
+}
+
+func queryWatchChannelForRequest(ctx context.Context, request events.APIGatewayProxyRequest) (*types.WatchChannel, error) {
 	resourceState := request.Headers["X-Goog-Resource-State"]
 	channelID := request.Headers["X-Goog-Channel-ID"]
 	resourceID := request.Headers["X-Goog-Resource-ID"]
@@ -40,7 +90,7 @@ func queryWatchChannelForRequest(request events.APIGatewayProxyRequest) (*types.
 	}
 
 	// query the watch channel based on the channelID
-	wc, err := cfg.store.GetWatchChannelByID(channelID)
+	wc, err := cfg.store.GetWatchChannelByID(ctx, channelID)
 	if err != nil {
 		slog.Error("Failed to find a registration for the channel", "channelID", channelID, "error", err)
 		return nil, fmt.Errorf("invalid file notification")
@@ -56,74 +106,48 @@ func queryWatchChannelForRequest(request events.APIGatewayProxyRequest) (*types.
 	return wc, nil
 }
 
-func (cfg *handlerConfig) processFileNotification(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func process(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	slog.Debug(">>processFileNotification")
 	defer slog.Debug("<<processFileNotification")
 
-	var err error
+	if err := initLambda(ctx); err != nil {
+		slog.Error("Failed to initialize the lambda", "error", err)
+		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
+	}
 
 	// Parse the folderID from the gateway request
-	wc, err := queryWatchChannelForRequest(request)
+	wc, err := queryWatchChannelForRequest(ctx, request)
 	if err != nil {
 		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
 	}
 
 	message := types.ChannelNotification{
-		ChannelID: wc.ChannelID,
-		FolderID:  wc.FolderID,
+		NotificationID: uuid.New().String(),
+		ChannelID:      wc.ChannelID,
+		FolderID:       wc.FolderID,
 	}
 
 	messageBody, err := json.Marshal(&message)
 	if err != nil {
-		return events.APIGatewayProxyResponse{StatusCode: 500}, err
+		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
 	}
 
-	_, err = cfg.sqsClient.SendMessage(context.TODO(), &sqs.SendMessageInput{
+	slog.Info("Sending SQS message", "channeID", wc.ChannelID, "folderID", wc.FolderID)
+
+	_, err = cfg.sqsClient.SendMessage(ctx, &sqs.SendMessageInput{
 		QueueUrl:    &cfg.queueURL,
 		MessageBody: aws.String(string(messageBody)),
 	})
 	if err != nil {
-		return events.APIGatewayProxyResponse{StatusCode: 500}, err
+		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
 	}
 
 	return util.BuildGatewayResponse("Processing new file", http.StatusOK)
-}
-
-func init() {
-	slog.Debug(">>init")
-	defer slog.Debug("<<init")
-
-	cfg = &handlerConfig{}
-
-	var err error
-	cfg.awsCfg, err = config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		slog.Error("Failed to load the AWS config", "error", err)
-		os.Exit(1)
-	}
-
-	// Create an SQS client
-	cfg.sqsClient = sqs.NewFromConfig(cfg.awsCfg)
-
-	// load the SQS URL that was configured
-	cfg.queueURL = os.Getenv("SQS_QUEUE_URL")
-	if cfg.queueURL == "" {
-		slog.Error("SQS URL is not configured")
-		os.Exit(1)
-	}
-
-	// Create a storage client if we don't have one
-	cfg.store, err = util.VerifyWatchChannelStore(cfg.store)
-	if err != nil {
-		os.Exit(1)
-	}
 }
 
 func main() {
 	slog.Debug(">>main")
 	defer slog.Debug("<<main")
 
-	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-		return cfg.processFileNotification(request)
-	})
+	lambda.Start(process)
 }

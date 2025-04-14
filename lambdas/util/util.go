@@ -7,13 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/KyleBrandon/scriptor/pkg/database"
-	"github.com/KyleBrandon/scriptor/pkg/google"
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/sashabaranov/go-openai"
 )
+
+func Assert[V comparable](got, expected V, message string) {
+	if expected != got {
+		panic(message)
+	}
+}
 
 func BuildGatewayResponse(message string, statusCode int) (events.APIGatewayProxyResponse, error) {
 	return events.APIGatewayProxyResponse{
@@ -22,11 +27,12 @@ func BuildGatewayResponse(message string, statusCode int) (events.APIGatewayProx
 	}, nil
 }
 
-func BuildStepInput(id, stage string) (string, error) {
+func BuildStepInput(notificationID, documentID, stage string) (string, error) {
 	// Start the state machine with the document id and stage
 	input := types.DocumentStep{
-		DocumentID: id,
-		Stage:      stage,
+		NotificationID: notificationID,
+		DocumentID:     documentID,
+		Stage:          stage,
 	}
 
 	inputJSON, err := json.Marshal(input)
@@ -38,7 +44,7 @@ func BuildStepInput(id, stage string) (string, error) {
 	return string(inputJSON), nil
 }
 
-func GetDocumentName(fullName string) string {
+func GetNamePart(fullName string) string {
 
 	ext := filepath.Ext(fullName)
 	nameWithoutExt := strings.TrimSuffix(fullName, ext)
@@ -46,11 +52,11 @@ func GetDocumentName(fullName string) string {
 	return nameWithoutExt
 }
 
-func getSecret(sm *secretsmanager.Client, secretName string) (string, error) {
+func getSecret(ctx context.Context, sm *secretsmanager.Client, secretName string) (string, error) {
 
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
-	result, err := sm.GetSecretValue(context.TODO(), input)
+	result, err := sm.GetSecretValue(ctx, input)
 	if err != nil {
 		return "", err
 	}
@@ -59,18 +65,12 @@ func getSecret(sm *secretsmanager.Client, secretName string) (string, error) {
 }
 
 // TODO: Make this into a generic
-func GetDefaultFolderLocations() (*types.GoogleFolderDefaultLocations, error) {
-
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		slog.Error("failed to load the AWS config", "error", err)
-		return nil, err
-	}
+func GetDefaultFolderLocations(ctx context.Context, awsCfg aws.Config) (*types.GoogleFolderDefaultLocations, error) {
 
 	sm := secretsmanager.NewFromConfig(awsCfg)
 
 	// no watch channels yet, let's seed a default
-	folderInfo, err := getSecret(sm, types.GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS)
+	folderInfo, err := getSecret(ctx, sm, types.GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS)
 	if err != nil {
 		slog.Error("Failed to get the default folder locations from AWS secret manager", "error", err)
 		return nil, err
@@ -87,73 +87,49 @@ func GetDefaultFolderLocations() (*types.GoogleFolderDefaultLocations, error) {
 	return &folderLocations, nil
 }
 
-// TODO:  Clean these Verify*** methods up, use a generic or function pointer for the new store
-// Verify the DynamoDB storage connection and create a new one if it has been closed for any reason.
-func VerifyWatchChannelStore(store database.WatchChannelStore) (database.WatchChannelStore, error) {
-	var err error
+func CreateChatGPTClient(ctx context.Context, awsCfg aws.Config) (*openai.Client, error) {
 
-	// if we do not have a store initialized, then create one
-	if store == nil {
-		store, err = database.NewWatchChannelStore()
-		if err != nil {
-			slog.Error("Failed to configure the DynamoDB client", "error", err)
-			return nil, err
-		}
+	svc := secretsmanager.NewFromConfig(awsCfg)
 
-		return store, nil
+	secretName := types.CHATGPT_SECRETS
+	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
+
+	result, err := svc.GetSecretValue(ctx, input)
+	if err != nil {
+		return nil, err
 	}
 
-	// make sure we can query the database
-	if err = store.Ping(); err != nil {
-		// create
-		store, err = database.NewWatchChannelStore()
-		if err != nil {
-			slog.Error("Failed to configure the DynamoDB client", "error", err)
-			return nil, err
-		}
+	var chatgptSecrets types.ChatGptSecrets
+
+	err = json.Unmarshal([]byte(*result.SecretString), &chatgptSecrets)
+	if err != nil {
+		return nil, err
 	}
 
-	return store, nil
+	client := openai.NewClient(chatgptSecrets.ApiKey)
+	return client, nil
 }
 
-func VerifyDocumentStore(store database.DocumentStore) (database.DocumentStore, error) {
-	var err error
+func LoadMathpixSecrets(ctx context.Context, awsCfg aws.Config) (*types.MathpixSecrets, error) {
 
-	// if we do not have a store initialized, then create one
-	if store == nil {
-		store, err = database.NewDocumentStore()
-		if err != nil {
-			slog.Error("Failed to configure the DynamoDB client", "error", err)
-			return nil, err
-		}
+	// New secrets manager from AWS
+	svc := secretsmanager.NewFromConfig(awsCfg)
 
-		return store, nil
+	secretName := types.MATHPIX_SECRETS
+	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
+
+	result, err := svc.GetSecretValue(ctx, input)
+	if err != nil {
+		return nil, err
 	}
 
-	// make sure we can query the database
-	if err = store.Ping(); err != nil {
-		// create
-		store, err = database.NewDocumentStore()
-		if err != nil {
-			slog.Error("Failed to configure the DynamoDB client", "error", err)
-			return nil, err
-		}
+	var mathpixSecrets types.MathpixSecrets
+
+	err = json.Unmarshal([]byte(*result.SecretString), &mathpixSecrets)
+	if err != nil {
+		return nil, err
 	}
 
-	return store, nil
-}
+	return &mathpixSecrets, nil
 
-// Verify the Google Drive service connection and create a new one if it is not valid.
-func VerifyDriveContext(driveContext *google.GoogleDriveContext) (*google.GoogleDriveContext, error) {
-	if driveContext == nil {
-		var err error
-		driveContext, err = google.NewGoogleDrive()
-		if err != nil {
-			//
-			slog.Error("Failed to initialize the Google Drive service context", "error", err)
-			return nil, err
-		}
-	}
-
-	return driveContext, nil
 }

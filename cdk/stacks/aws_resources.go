@@ -86,6 +86,16 @@ func (cfg *CdkScriptorConfig) initializeDocumentTable(stack awscdk.Stack) {
 		BillingMode: awsdynamodb.BillingMode_PAY_PER_REQUEST,
 	})
 
+	// Add a GSI to query by Google ID
+	cfg.documentTable.AddGlobalSecondaryIndex(&awsdynamodb.GlobalSecondaryIndexProps{
+		IndexName: jsii.String("GoogleFileIDIndex"),
+		PartitionKey: &awsdynamodb.Attribute{
+			Name: jsii.String("google_id"),
+			Type: awsdynamodb.AttributeType_STRING,
+		},
+		ProjectionType: awsdynamodb.ProjectionType_ALL,
+	})
+
 	// register the DocumentProcessingStage table
 	cfg.documentProcessingStageTable = awsdynamodb.NewTable(stack, jsii.String("DocumentProcessingStageTable"), &awsdynamodb.TableProps{
 		TableName: jsii.String(database.DOCUMENT_PROCESSING_STAGE_TABLE),

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
@@ -15,43 +16,83 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 )
 
-type sqsHandlerConfig struct {
+type handlerConfig struct {
 	store           database.WatchChannelStore
 	docStore        database.DocumentStore
 	dc              *google.GoogleDriveContext
-	awsCfg          aws.Config
 	stateMachineARN string
-	s3Client        *s3.Client
 	sfnClient       *sfn.Client
 }
 
-var cfg *sqsHandlerConfig
+var (
+	initOnce sync.Once
+	cfg      *handlerConfig
+)
 
-func (cfg *sqsHandlerConfig) process(ctx context.Context, sqsEvent events.SQSEvent) error {
+// Load all the inital configuration settings for the lambda
+func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
+
+	cfg = &handlerConfig{}
+
+	var err error
+	cfg.store, err = database.NewWatchChannelStore(ctx)
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		return nil, err
+	}
+
+	cfg.docStore, err = database.NewDocumentStore(ctx)
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		return nil, err
+	}
+
+	cfg.dc, err = google.NewGoogleDrive(ctx)
+	if err != nil {
+		//
+		slog.Error("Failed to initialize the Google Drive service context", "error", err)
+		return nil, err
+	}
+
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		slog.Error("Failed to load the AWS config", "error", err)
+		return nil, err
+	}
+
+	cfg.stateMachineARN = os.Getenv("STATE_MACHINE_ARN")
+	if cfg.stateMachineARN == "" {
+		slog.Error("Failed to get the state machine ARN")
+		return nil, err
+	}
+
+	// Create a Step Function Client to start the state machine later
+	cfg.sfnClient = sfn.NewFromConfig(awsCfg)
+	return cfg, nil
+}
+
+// Ensure that the configuration settings are only loaded once
+func initLambda(ctx context.Context) error {
+	var err error
+	initOnce.Do(func() {
+		slog.Debug(">>initLambda")
+		defer slog.Debug("<<initLambda")
+
+		cfg, err = loadConfiguration(ctx)
+	})
+
+	return err
+}
+
+func process(ctx context.Context, sqsEvent events.SQSEvent) error {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
-	var err error
-
-	// Create a storage client if we don't have one
-	cfg.store, err = util.VerifyWatchChannelStore(cfg.store)
-	if err != nil {
-		return err
-	}
-
-	// Create a document storage client if we don't have one
-	cfg.docStore, err = util.VerifyDocumentStore(cfg.docStore)
-	if err != nil {
-		return err
-	}
-
-	// Create a Google Drive service if we don't have one
-	cfg.dc, err = util.VerifyDriveContext(cfg.dc)
-	if err != nil {
+	if err := initLambda(ctx); err != nil {
+		slog.Error("Failed to initialize the lambda", "error", err)
 		return err
 	}
 
@@ -64,26 +105,11 @@ func (cfg *sqsHandlerConfig) process(ctx context.Context, sqsEvent events.SQSEve
 		}
 
 		// Acquire the changes lock on the channel
-		startToken, err := cfg.store.AcquireChangesToken(eventData.ChannelID)
+		startToken, err := cfg.store.AcquireChangesToken(ctx, eventData.ChannelID)
 		if err != nil {
 			slog.Error("Failed to acquire the watch channel changes lock", "error", err)
 			return err
 		}
-
-		// Get the new token that we'll process changes from on next call
-		newToken, err := cfg.dc.GetChangesStartToken()
-		if err != nil {
-			slog.Error("Failed to get the next changes start token", "error", err)
-			return err
-		}
-
-		// ensure that we try to release the lock before we return
-		defer func() {
-			err = cfg.store.ReleaseChangesToken(eventData.ChannelID, newToken)
-			if err != nil {
-				slog.Error("Failed to release the watch channel changes lock", "error", err)
-			}
-		}()
 
 		// Query the files that have changed and get the next changes start token
 		changes, err := cfg.dc.QueryChanges(eventData.FolderID, startToken)
@@ -92,31 +118,47 @@ func (cfg *sqsHandlerConfig) process(ctx context.Context, sqsEvent events.SQSEve
 			return err
 		}
 
+		// Update the start token so we pick up any new changes next time
+		err = cfg.store.ReleaseChangesToken(ctx, eventData.ChannelID, changes.NextStartToken)
+		if err != nil {
+			slog.Error("Failed to release the watch channel changes lock", "error", err)
+		}
+
 		// Check if there are documents to process
 		if len(changes.Documents) == 0 {
 			return nil
 		}
 
+		slog.Info("Found documents to process", "count", len(changes.Documents), "folderID", eventData.FolderID, "documents", changes.Documents)
+
 		// Start the state machine for each document discovered
 		for _, document := range changes.Documents {
-			slog.Info("Processing document from queue", "name", document.Name)
+			slog.Info("Processing document from queue", "name", document.Name, "notificationID", eventData.NotificationID)
+
+			// Check if we have already processed this document
+			_, err = cfg.docStore.GetDocumentByGoogleID(ctx, document.GoogleID)
+			if err == nil {
+				// The document exists, ignore it
+				slog.Warn("Document already processed", "id", document.ID, "googleID", document.GoogleID, "name", document.Name)
+				continue
+			}
 
 			// Save the Google Drive document information
-			err = cfg.docStore.InsertDocument(document)
+			err = cfg.docStore.InsertDocument(ctx, document)
 			if err != nil {
 				slog.Error("Failed to save the document metadata", "docName", document.Name, "error", err)
 				return err
 			}
 
 			// TODO: this should be a different step type as it's the Google document ID not ours
-			input, err := util.BuildStepInput(document.ID, types.DOCUMENT_STAGE_NEW)
+			input, err := util.BuildStepInput(eventData.NotificationID, document.ID, types.DOCUMENT_STAGE_NEW)
 			if err != nil {
 				slog.Error("Failed to build the stage input for the next stage", "docName", document.Name, "error", err)
 				return err
 			}
 
-			// start the state machine execution
-			_, err = cfg.sfnClient.StartExecution(context.TODO(), &sfn.StartExecutionInput{
+			// start the state machine
+			_, err = cfg.sfnClient.StartExecution(ctx, &sfn.StartExecutionInput{
 				StateMachineArn: &cfg.stateMachineARN,
 				Input:           aws.String(input),
 			})
@@ -130,36 +172,9 @@ func (cfg *sqsHandlerConfig) process(ctx context.Context, sqsEvent events.SQSEve
 	return nil
 }
 
-func init() {
-	slog.Debug(">>init")
-	defer slog.Debug("<<init")
-
-	var err error
-	cfg = &sqsHandlerConfig{}
-
-	cfg.awsCfg, err = config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		slog.Error("Failed to load the AWS config", "error", err)
-		os.Exit(1)
-	}
-
-	cfg.stateMachineARN = os.Getenv("STATE_MACHINE_ARN")
-	if cfg.stateMachineARN == "" {
-		slog.Error("Failed to get the state machine ARN")
-		os.Exit(1)
-	}
-
-	// Create a Step Function Client to start the state machine later
-	cfg.sfnClient = sfn.NewFromConfig(cfg.awsCfg)
-
-	// Create the S3 client
-	cfg.s3Client = s3.NewFromConfig(cfg.awsCfg)
-
-}
-
 func main() {
 	slog.Debug(">>main")
 	defer slog.Debug("<<main")
 
-	lambda.Start(cfg.process)
+	lambda.Start(process)
 }

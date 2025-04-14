@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/KyleBrandon/scriptor/lambdas/util"
 	stypes "github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -13,8 +14,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-func NewDocumentStore() (DocumentStore, error) {
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+func NewDocumentStore(ctx context.Context) (DocumentStore, error) {
+	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		slog.Error("Failed to configure the DocumentStoreContext ", "error", err)
 		return nil, err
@@ -27,16 +28,7 @@ func NewDocumentStore() (DocumentStore, error) {
 	}, nil
 }
 
-func (db *DocumentStoreContext) Ping() error {
-	// perform a quick query to see if the db is up.
-	// _, err := u.GetWatchChannels()
-
-	// return err
-	// TODO: FIXME
-	return nil
-}
-
-func (db *DocumentStoreContext) GetDocument(id string) (*stypes.Document, error) {
+func (db *DocumentStoreContext) GetDocument(ctx context.Context, id string) (*stypes.Document, error) {
 
 	ret := &stypes.Document{}
 
@@ -47,7 +39,7 @@ func (db *DocumentStoreContext) GetDocument(id string) (*stypes.Document, error)
 		},
 	}
 
-	result, err := db.store.GetItem(context.TODO(), getItemInput)
+	result, err := db.store.GetItem(ctx, getItemInput)
 	if err != nil {
 		slog.Error("Failed to query the document", "error", err)
 		return ret, err
@@ -62,7 +54,39 @@ func (db *DocumentStoreContext) GetDocument(id string) (*stypes.Document, error)
 	return ret, nil
 }
 
-func (db *DocumentStoreContext) InsertDocument(document *stypes.Document) error {
+func (db *DocumentStoreContext) GetDocumentByGoogleID(ctx context.Context, googleFileID string) (*stypes.Document, error) {
+
+	queryInput := &dynamodb.QueryInput{
+		TableName:              aws.String(WATCH_CHANNEL_TABLE),
+		IndexName:              aws.String("GoogleFileIDIndex"),
+		KeyConditionExpression: aws.String("google_id = :googleID"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":googleID": &types.AttributeValueMemberS{Value: googleFileID},
+		},
+	}
+
+	result, err := db.store.Query(ctx, queryInput)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(result.Items) == 0 {
+		return nil, ErrDocumentNotFound
+	}
+
+	util.Assert(len(result.Items), 1, "We should only have 1 file returned when querying by the Google file ID")
+
+	var documents []stypes.Document
+
+	err = attributevalue.UnmarshalListOfMaps(result.Items, &documents)
+	if err != nil {
+		return nil, err
+	}
+
+	return &documents[0], nil
+}
+
+func (db *DocumentStoreContext) InsertDocument(ctx context.Context, document *stypes.Document) error {
 
 	av, err := attributevalue.MarshalMap(document)
 	if err != nil {
@@ -75,7 +99,7 @@ func (db *DocumentStoreContext) InsertDocument(document *stypes.Document) error 
 		Item:      av,
 	}
 
-	_, err = db.store.PutItem(context.TODO(), item)
+	_, err = db.store.PutItem(ctx, item)
 	if err != nil {
 		slog.Error("Failed to insert the document", "error", err)
 		return err
@@ -85,7 +109,7 @@ func (db *DocumentStoreContext) InsertDocument(document *stypes.Document) error 
 
 }
 
-func (db *DocumentStoreContext) GetDocumentStage(id, stage string) (*stypes.DocumentProcessingStage, error) {
+func (db *DocumentStoreContext) GetDocumentStage(ctx context.Context, id string, stage string) (*stypes.DocumentProcessingStage, error) {
 	ret := &stypes.DocumentProcessingStage{}
 
 	key := map[string]types.AttributeValue{
@@ -98,7 +122,7 @@ func (db *DocumentStoreContext) GetDocumentStage(id, stage string) (*stypes.Docu
 		Key:       key,
 	}
 
-	result, err := db.store.GetItem(context.TODO(), item)
+	result, err := db.store.GetItem(ctx, item)
 	if err != nil {
 		slog.Error("Failed to find the document processing stage", "id", id, "stage", stage, "error", err)
 		return ret, err
@@ -114,7 +138,7 @@ func (db *DocumentStoreContext) GetDocumentStage(id, stage string) (*stypes.Docu
 	return ret, nil
 }
 
-func (db *DocumentStoreContext) insertDocumentStage(stage *stypes.DocumentProcessingStage) error {
+func (db *DocumentStoreContext) insertDocumentStage(ctx context.Context, stage *stypes.DocumentProcessingStage) error {
 
 	stage.StartedAt = time.Now().UTC()
 
@@ -129,7 +153,7 @@ func (db *DocumentStoreContext) insertDocumentStage(stage *stypes.DocumentProces
 		Item:      av,
 	}
 
-	_, err = db.store.PutItem(context.TODO(), item)
+	_, err = db.store.PutItem(ctx, item)
 	if err != nil {
 		slog.Error("Failed to insert the document stage", "error", err)
 		return err
@@ -139,7 +163,7 @@ func (db *DocumentStoreContext) insertDocumentStage(stage *stypes.DocumentProces
 
 }
 
-func (db *DocumentStoreContext) StartDocumentStage(id, stage, originalFileName string) (*stypes.DocumentProcessingStage, error) {
+func (db *DocumentStoreContext) StartDocumentStage(ctx context.Context, id string, stage string, originalFileName string) (*stypes.DocumentProcessingStage, error) {
 	// Update the 'download' processing stage to in-progress
 	docStage := &stypes.DocumentProcessingStage{
 		ID:               id,
@@ -149,7 +173,7 @@ func (db *DocumentStoreContext) StartDocumentStage(id, stage, originalFileName s
 		OriginalFileName: originalFileName,
 	}
 
-	err := db.insertDocumentStage(docStage)
+	err := db.insertDocumentStage(ctx, docStage)
 	if err != nil {
 		slog.Error("Failed to save the document processing stage", "error", err)
 		return nil, err
@@ -158,7 +182,7 @@ func (db *DocumentStoreContext) StartDocumentStage(id, stage, originalFileName s
 	return docStage, nil
 }
 
-func (db *DocumentStoreContext) CompleteDocumentStage(stage *stypes.DocumentProcessingStage) error {
+func (db *DocumentStoreContext) CompleteDocumentStage(ctx context.Context, stage *stypes.DocumentProcessingStage) error {
 
 	stage.CompletedAt = time.Now().UTC()
 	stage.StageStatus = stypes.DOCUMENT_STATUS_COMPLETE
@@ -184,7 +208,7 @@ func (db *DocumentStoreContext) CompleteDocumentStage(stage *stypes.DocumentProc
 		ReturnValues:              types.ReturnValueUpdatedNew,
 	}
 
-	_, err = db.store.UpdateItem(context.TODO(), input)
+	_, err = db.store.UpdateItem(ctx, input)
 	if err != nil {
 		slog.Error("Failed to update the document processing stage", "error", err)
 		return err

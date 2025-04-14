@@ -15,8 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-func NewWatchChannelStore() (WatchChannelStore, error) {
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+func NewWatchChannelStore(ctx context.Context) (WatchChannelStore, error) {
+	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		slog.Error("Failed to configure the WatchChannelStoreContext", "error", err)
 		return nil, err
@@ -29,20 +29,13 @@ func NewWatchChannelStore() (WatchChannelStore, error) {
 	}, nil
 }
 
-func (db *WatchChannelStoreContext) Ping() error {
-	// perform a quick query to see if the db is up.
-	_, err := db.GetWatchChannels()
-
-	return err
-}
-
-func (db *WatchChannelStoreContext) GetWatchChannels() ([]*stypes.WatchChannel, error) {
+func (db *WatchChannelStoreContext) GetWatchChannels(ctx context.Context) ([]*stypes.WatchChannel, error) {
 	scanInput := &dynamodb.ScanInput{
 		TableName: aws.String(WATCH_CHANNEL_TABLE),
 	}
 
 	// Execute Scan
-	result, err := db.store.Scan(context.TODO(), scanInput)
+	result, err := db.store.Scan(ctx, scanInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan watch channels: %w", err)
 	}
@@ -63,32 +56,7 @@ func (db *WatchChannelStoreContext) GetWatchChannels() ([]*stypes.WatchChannel, 
 
 }
 
-func (db *WatchChannelStoreContext) InsertWatchChannel(watchChannel *stypes.WatchChannel) error {
-
-	watchChannel.CreatedAt = time.Now().UTC()
-
-	av, err := attributevalue.MarshalMap(watchChannel)
-	if err != nil {
-		slog.Error("Failed to marshal the document", "error", err)
-		return err
-	}
-
-	// Create DynamoDB Table
-	item := &dynamodb.PutItemInput{
-		TableName: aws.String(WATCH_CHANNEL_TABLE),
-		Item:      av,
-	}
-
-	_, err = db.store.PutItem(context.TODO(), item)
-	if err != nil {
-		slog.Error("Failed to insert the watch channel", "error", err)
-		return err
-	}
-
-	return nil
-}
-
-func (db *WatchChannelStoreContext) UpdateWatchChannel(watchChannel *stypes.WatchChannel) error {
+func (db *WatchChannelStoreContext) UpdateWatchChannel(ctx context.Context, watchChannel *stypes.WatchChannel) error {
 
 	watchChannel.UpdatedAt = time.Now().UTC()
 
@@ -115,7 +83,7 @@ func (db *WatchChannelStoreContext) UpdateWatchChannel(watchChannel *stypes.Watc
 	}
 
 	// Perform the update
-	_, err = db.store.UpdateItem(context.TODO(), input)
+	_, err = db.store.UpdateItem(ctx, input)
 	if err != nil {
 		slog.Error("Failed to update item", "error", err)
 		return err
@@ -124,7 +92,7 @@ func (db *WatchChannelStoreContext) UpdateWatchChannel(watchChannel *stypes.Watc
 	return nil
 }
 
-func (db *WatchChannelStoreContext) GetWatchChannelByID(channelID string) (*stypes.WatchChannel, error) {
+func (db *WatchChannelStoreContext) GetWatchChannelByID(ctx context.Context, channelID string) (*stypes.WatchChannel, error) {
 
 	queryInput := &dynamodb.QueryInput{
 		TableName:              aws.String(WATCH_CHANNEL_TABLE),
@@ -135,7 +103,7 @@ func (db *WatchChannelStoreContext) GetWatchChannelByID(channelID string) (*styp
 		},
 	}
 
-	result, err := db.store.Query(context.TODO(), queryInput)
+	result, err := db.store.Query(ctx, queryInput)
 	if err != nil {
 		return nil, err
 	}
@@ -153,17 +121,19 @@ func (db *WatchChannelStoreContext) GetWatchChannelByID(channelID string) (*styp
 	return &wcs[0], nil
 }
 
-func (db *WatchChannelStoreContext) CreateChangesToken(channelID, startToken string) error {
+func (db *WatchChannelStoreContext) CreateChangesToken(ctx context.Context, channelID, startToken string) error {
+	updatedAt := time.Now().UTC()
 
-	_, err := db.store.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+	_, err := db.store.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(WATCH_CHANNEL_LOCK_TABLE),
 		Key: map[string]types.AttributeValue{
 			"channel_id": &types.AttributeValueMemberS{Value: channelID},
 		},
-		UpdateExpression: aws.String("SET locked = :false, changes_start_token = :token"),
+		UpdateExpression: aws.String("SET locked = :false, changes_start_token = :token, updated_at = :updatedAt"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":false": &types.AttributeValueMemberBOOL{Value: false},
-			":token": &types.AttributeValueMemberS{Value: startToken},
+			":false":     &types.AttributeValueMemberBOOL{Value: false},
+			":token":     &types.AttributeValueMemberS{Value: startToken},
+			":updatedAt": &types.AttributeValueMemberS{Value: updatedAt.String()},
 		},
 	})
 	if err != nil {
@@ -174,22 +144,24 @@ func (db *WatchChannelStoreContext) CreateChangesToken(channelID, startToken str
 	return nil
 }
 
-func (db *WatchChannelStoreContext) AcquireChangesToken(channelID string) (string, error) {
-	now := time.Now().UnixMilli()
+func (db *WatchChannelStoreContext) AcquireChangesToken(ctx context.Context, channelID string) (string, error) {
+	updatedAt := time.Now()
+	now := updatedAt.UnixMilli()
 	leaseUntil := now + (30 * time.Second).Milliseconds()
 
-	result, err := db.store.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+	result, err := db.store.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(WATCH_CHANNEL_LOCK_TABLE),
 		Key: map[string]types.AttributeValue{
 			"channel_id": &types.AttributeValueMemberS{Value: channelID},
 		},
-		UpdateExpression:    aws.String("SET locked = :true, lock_expires = :leaseUntil"),
+		UpdateExpression:    aws.String("SET locked = :true, lock_expires = :leaseUntil, updated_at = :updatedAt"),
 		ConditionExpression: aws.String("locked = :false OR lock_expires < :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":true":       &types.AttributeValueMemberBOOL{Value: true},
 			":false":      &types.AttributeValueMemberBOOL{Value: false},
 			":now":        &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now)},
 			":leaseUntil": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", leaseUntil)},
+			":updatedAt":  &types.AttributeValueMemberS{Value: updatedAt.String()},
 		},
 		ReturnValues: types.ReturnValueAllNew,
 	})
@@ -213,7 +185,7 @@ func (db *WatchChannelStoreContext) AcquireChangesToken(channelID string) (strin
 	return "", fmt.Errorf("changes_start_token attribute not found or invalid")
 }
 
-func (db *WatchChannelStoreContext) ReleaseChangesToken(channelID, newStartToken string) error {
+func (db *WatchChannelStoreContext) ReleaseChangesToken(ctx context.Context, channelID, newStartToken string) error {
 
 	updateItemInput := &dynamodb.UpdateItemInput{
 		TableName: aws.String(WATCH_CHANNEL_LOCK_TABLE),
@@ -232,7 +204,7 @@ func (db *WatchChannelStoreContext) ReleaseChangesToken(channelID, newStartToken
 			&types.AttributeValueMemberS{Value: newStartToken}
 	}
 
-	_, err := db.store.UpdateItem(context.TODO(), updateItemInput)
+	_, err := db.store.UpdateItem(ctx, updateItemInput)
 
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException

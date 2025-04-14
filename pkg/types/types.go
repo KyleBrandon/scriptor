@@ -100,12 +100,14 @@ type (
 		ChangesStartToken string `dynamodbav:"changes_start_token"`
 		Locked            bool   `dynmodbav:"locked"`
 		LockExpires       int64  `dynamodbav:"lock_expires"`
+		UpdatedAt         string `dynamodbav:"updated_at"`
 	}
 
 	// Used to send an SQS notification that there are changes on a channel
 	ChannelNotification struct {
-		ChannelID string `json:"channel_id"`
-		FolderID  string `json:"folder_id"`
+		NotificationID string `json:"notification_id"`
+		ChannelID      string `json:"channel_id"`
+		FolderID       string `json:"folder_id"`
 	}
 
 	// Document state as it is being converted.
@@ -139,7 +141,8 @@ type (
 
 	// TODO: Rethink this
 	DocumentStep struct {
-		DocumentID string `json:"id"`
-		Stage      string `json:"stage"`
+		NotificationID string `json:"notification_id"`
+		DocumentID     string `json:"id"`
+		Stage          string `json:"stage"`
 	}
 )
