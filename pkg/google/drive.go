@@ -6,10 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/KyleBrandon/scriptor/pkg/database"
+	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -20,30 +21,33 @@ import (
 	"google.golang.org/api/option"
 )
 
-type GoogleDriveContext struct {
-	driveService *drive.Service
-	store        database.ScriptorStore
-}
+type (
+	GoogleDriveContext struct {
+		ctx          context.Context
+		driveService *drive.Service
+	}
+)
 
 // Create a new Google Drive storage context
-func NewGoogleDrive(store database.ScriptorStore) (*GoogleDriveContext, error) {
+func NewGoogleDrive(ctx context.Context) (*GoogleDriveContext, error) {
 	slog.Debug(">>GDriveStorageContext.New")
 	defer slog.Debug("<<GDriveStorageContext.New")
 
-	drive := &GoogleDriveContext{}
-	service, err := drive.getDriveService()
+	driveService, err := getDriveService(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	drive.driveService = service
-	drive.store = store
+	drive := &GoogleDriveContext{
+		ctx,
+		driveService,
+	}
 
 	return drive, nil
 }
 
-func getGoogleCredentials() ([]byte, error) {
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
+func getGoogleCredentials(ctx context.Context) ([]byte, error) {
+	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		slog.Error("failed to load the AWS config", "error", err)
 		os.Exit(1)
@@ -54,7 +58,7 @@ func getGoogleCredentials() ([]byte, error) {
 	secretName := types.GOOGLE_SERVICE_SECRETS
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
-	result, err := svc.GetSecretValue(context.TODO(), input)
+	result, err := svc.GetSecretValue(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -62,26 +66,26 @@ func getGoogleCredentials() ([]byte, error) {
 	return []byte(*result.SecretString), nil
 }
 
-func (gd *GoogleDriveContext) getDriveService() (*drive.Service, error) {
+func getDriveService(ctx context.Context) (*drive.Service, error) {
 	// Load service account JSON
-	data, err := getGoogleCredentials()
+	data, err := getGoogleCredentials(ctx)
 	if err != nil {
 		slog.Error("Unable to read service account file", "error", err)
 		return nil, err
 	}
 
 	// Authenticate with Google Drive API using Service Account
-	creds, err := google.CredentialsFromJSON(context.TODO(), data, drive.DriveScope)
+	creds, err := google.CredentialsFromJSON(ctx, data, drive.DriveScope)
 	if err != nil {
 		slog.Error("Unable to parse credentials", "error", err)
 		return nil, err
 	}
 
 	// Create an HTTP client using TokenSource
-	client := oauth2.NewClient(context.TODO(), creds.TokenSource)
+	client := oauth2.NewClient(ctx, creds.TokenSource)
 
 	// Create Google Drive service
-	service, err := drive.NewService(context.TODO(), option.WithHTTPClient(client))
+	service, err := drive.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		slog.Error("Unable to create Drive client", "error", err)
 		return nil, err
@@ -90,72 +94,145 @@ func (gd *GoogleDriveContext) getDriveService() (*drive.Service, error) {
 	return service, nil
 }
 
-// QueryFiles from the watch folder and send them on the channel
-func (gd *GoogleDriveContext) QueryFiles(folderID string) ([]*types.Document, error) {
-	slog.Debug(">>QueryFiles")
-	defer slog.Debug("<<QueryFiles")
+func (gd *GoogleDriveContext) GetChangesStartToken() (string, error) {
 
-	// build the query string to find the new fines in Google Drive
-	query := fmt.Sprintf("mimeType='application/pdf' and ('%s' in parents)", folderID)
+	slog.Debug(">>GetChangesStartToken")
+	defer slog.Debug("<<GetChangesStartToken")
 
-	// query the files from Google Drive
-	fileList, err := gd.driveService.Files.List().
-		Q(query).
-		Fields("files(id, name, parents, createdTime, modifiedTime, size)").
-		Do()
+	resp, err := gd.driveService.Changes.GetStartPageToken().Do()
 	if err != nil {
-		slog.Error("Failed to fetch files", "error", err)
-		return nil, err
+		slog.Error("Failed to query the changes start token", "error", err)
+		return "", err
 	}
 
-	// Did we get any?
-	if len(fileList.Files) == 0 {
-		slog.Debug("No files found.")
-		return nil, err
-	}
-
-	documents := make([]*types.Document, 0, len(fileList.Files))
-	for _, file := range fileList.Files {
-
-		createdTime, err := time.Parse(time.RFC3339, file.CreatedTime)
-		if err != nil {
-			slog.Warn("Failed to parse the created time for the file", "fileID", file.Id, "fileName", file.Name, "createdTime", file.CreatedTime, "error", err)
-		}
-
-		modifiedTime, err := time.Parse(time.RFC3339, file.ModifiedTime)
-		if err != nil {
-			slog.Warn("Failed to parse the modified time for the file", "fileID", file.Id, "fileName", file.Name, "modifiedTime", file.ModifiedTime, "error", err)
-		}
-
-		document := types.Document{
-			ID:             uuid.New().String(),
-			GoogleID:       file.Id,
-			GoogleFolderID: file.Parents[0],
-			Name:           file.Name,
-			Size:           file.Size,
-			CreatedTime:    createdTime,
-			ModifiedTime:   modifiedTime,
-		}
-
-		documents = append(documents, &document)
-	}
-
-	return documents, nil
+	return resp.StartPageToken, nil
 }
 
-func (gd *GoogleDriveContext) Archive(document *types.Document, archiveFolderID string) error {
+func (gd *GoogleDriveContext) QueryChanges(folderID, startToken string) (*types.DocumentChanges, error) {
+	slog.Debug(">>QueryChanges")
+	defer slog.Debug("<<QueryChanges")
+
+	documents := make([]*types.Document, 0)
+	pageToken := startToken
+
+	seen := make(map[string]bool)
+
+	for pageToken != "" {
+
+		// get the changes since the pageToken
+		changes, err := gd.driveService.Changes.
+			List(pageToken).
+			Fields("nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, parents, createdTime, modifiedTime, size))").
+			Do()
+		if err != nil {
+			slog.Error("Failed to query the drive changes using a start token", "folderID", folderID, "startToken", startToken, "error", err)
+			return nil, err
+		}
+
+		// build a Document from each file that's changed
+		for _, change := range changes.Changes {
+			util.Assert(change.FileId, change.File.Id, "expect these to be the same")
+
+			// ignore drive changes
+			if change.ChangeType == "drive" || change.Removed || change.File.Trashed {
+				continue
+			}
+
+			// is the file in the folder we're monitoring?
+			if !slices.Contains(change.File.Parents, folderID) {
+				slog.Warn("Document not in the folder we're monitoring", "id", change.File.Id)
+				continue
+			}
+
+			// We deduplicate the change notifications
+			if seen[change.File.Id] {
+				slog.Warn("Already processed document", "id", change.File.Id)
+				continue
+			}
+
+			seen[change.File.Id] = true
+
+			document, err := buildDocument(change.File)
+			if err != nil {
+				slog.Error("Failed to build the document from the Google Drive File", "docName", change.File.Name, "error", err)
+				continue
+			}
+
+			documents = append(documents, document)
+		}
+
+		if changes.NextPageToken == "" {
+			pageToken = changes.NewStartPageToken
+			break
+		}
+
+		pageToken = changes.NextPageToken
+	}
+
+	dc := &types.DocumentChanges{
+		Documents:      documents,
+		NextStartToken: pageToken,
+	}
+
+	return dc, nil
+}
+
+func (gd *GoogleDriveContext) GetDocument(id string) (*types.Document, error) {
+	slog.Debug(">>GetDocument")
+	defer slog.Debug("<<GetDocument")
+
+	file, err := gd.driveService.Files.Get(id).Fields("id, name, parents, createdTime, modifiedTime, size").Do()
+	if err != nil {
+		slog.Error("Failed to get document by ID", "id", id, "error", err)
+		return nil, err
+	}
+
+	document, err := buildDocument(file)
+	if err != nil {
+		slog.Error("Failed to parse document", "id", id, "error", err)
+		return nil, err
+	}
+
+	return document, nil
+}
+
+func buildDocument(file *drive.File) (*types.Document, error) {
+
+	createdTime, err := time.Parse(time.RFC3339, file.CreatedTime)
+	if err != nil {
+		slog.Warn("Failed to parse the created time for the file", "fileID", file.Id, "fileName", file.Name, "createdTime", file.CreatedTime, "error", err)
+		return nil, err
+	}
+
+	modifiedTime, err := time.Parse(time.RFC3339, file.ModifiedTime)
+	if err != nil {
+		slog.Warn("Failed to parse the modified time for the file", "fileID", file.Id, "fileName", file.Name, "modifiedTime", file.ModifiedTime, "error", err)
+		return nil, err
+	}
+
+	document := &types.Document{
+		ID:             uuid.New().String(),
+		GoogleID:       file.Id,
+		GoogleFolderID: file.Parents[0],
+		Name:           file.Name,
+		Size:           file.Size,
+		CreatedTime:    createdTime,
+		ModifiedTime:   modifiedTime,
+	}
+
+	return document, nil
+
+}
+
+func (gd *GoogleDriveContext) Archive(id string, archiveFolderID string) error {
 	// 	// move the document to the archive folder
-	file, err := gd.driveService.Files.Get(document.GoogleID).Fields("parents").Do()
+	file, err := gd.driveService.Files.Get(id).Fields("parents").Do()
 	if err != nil {
 		return err
 	}
 
-	if len(archiveFolderID) == 0 {
-		return fmt.Errorf("failed to find an archive folder for document: %s in folder: %s", document.Name, document.GoogleID)
-	}
-
 	previousParents := strings.Join(file.Parents, ",")
-	_, err = gd.driveService.Files.Update(document.GoogleID, nil).
+	_, err = gd.driveService.Files.Update(id, nil).
 		AddParents(archiveFolderID).
 		RemoveParents(previousParents).
 		Fields("id, parents").
@@ -200,56 +277,9 @@ func (gd *GoogleDriveContext) SaveFile(fileName, folderID string, reader io.Read
 	return nil
 }
 
-func (gd *GoogleDriveContext) ReRegisterWebhook(url string) error {
-	slog.Info(">>ReRegisterWebhook")
-	defer slog.Info("<<ReRegisterWebhook")
-
-	// TODO: Remove the reference to the 'store'
-	// get all the channels that we're currently watching
-	watchChannels, err := gd.store.GetWatchChannels()
-	if err != nil {
-		slog.Error("Failed to get the list of active watch channels", "error", err)
-		return err
-	}
-
-	if len(watchChannels) == 0 {
-		slog.Warn("There are no watch channels configured")
-		return nil
-	}
-
-	register := make([]types.WatchChannel, 0)
-
-	// We want to check if a watch channel is set to expire now or in the next 4 hours
-	// The reason being is that the we only check every 4 hours and the channels are set
-	// to expire in 48 hours.  We don't want to miss a channel expiring
-	channelRegisterTime := time.Now().Add(4 * time.Hour).UnixMilli()
-	for _, wc := range watchChannels {
-		slog.Info("check watch channel for renewal", "channel", wc.ChannelID, "currentTime", channelRegisterTime, "channelExpires", wc.ExpiresAt, "currentURL", url, "channelURL", wc.WebhookUrl)
-		if wc.ExpiresAt <= channelRegisterTime || wc.WebhookUrl != url {
-			// we need to re-register this channel
-			slog.Info("channel has expired or the webhook URL has changed")
-			register = append(register, wc)
-		}
-	}
-
-	if len(register) == 0 {
-		slog.Info("No watch channels require re-registration")
-		return nil
-	}
-
-	for _, wc := range register {
-		err = gd.createWatchChannel(wc, url)
-		if err != nil {
-			slog.Error("failed to register channel for folder", "folderID", wc.FolderID, "channelID", wc.ChannelID, "error", err)
-		}
-	}
-
-	return nil
-}
-
-func (gd *GoogleDriveContext) createWatchChannel(wc types.WatchChannel, url string) error {
-	slog.Info(">>createWatchChannel")
-	defer slog.Info("<<createWatchChannel")
+func (gd *GoogleDriveContext) CreateWatchChannel(wc *types.WatchChannel, url string) error {
+	slog.Debug(">>createWatchChannel")
+	defer slog.Debug("<<createWatchChannel")
 
 	// Set the watch channel to expire in 2 days
 	wc.ChannelID = uuid.New().String()
@@ -267,18 +297,11 @@ func (gd *GoogleDriveContext) createWatchChannel(wc types.WatchChannel, url stri
 	channel, err := gd.driveService.Files.Watch(wc.FolderID, req).Do()
 	if err != nil {
 		slog.Error("Failed to watch folder", "folderID", wc.FolderID, "error", err)
-		return nil
+		return err
 	}
 
 	// save the resource identifier from AWS for the channel
 	wc.ResourceID = channel.ResourceId
-
-	// Update the watch channel in the database
-	err = gd.store.UpdateWatchChannel(wc)
-	if err != nil {
-		slog.Error("Failed to create or update the watch channel", "folderID", wc.FolderID, "channelID", wc.ChannelID, "error", err)
-		return err
-	}
 
 	return nil
 }

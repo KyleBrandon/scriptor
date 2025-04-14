@@ -4,36 +4,78 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"os"
+	"sync"
 	"time"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/google"
 	"github.com/KyleBrandon/scriptor/pkg/types"
-	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/sfn"
 )
 
-type downloadConfig struct {
-	store           database.ScriptorStore
-	dc              *google.GoogleDriveContext
-	awsCfg          aws.Config
-	stateMachineARN string
-	s3Client        *s3.Client
+type handlerConfig struct {
+	store    database.DocumentStore
+	dc       *google.GoogleDriveContext
+	s3Client *s3.Client
 }
 
 var (
 	BucketName string = types.S3_BUCKET_NAME
-	cfg        *downloadConfig
+	initOnce   sync.Once
+	cfg        *handlerConfig
 )
 
-func (cfg *downloadConfig) copyDocument(document *types.Document, stage *types.DocumentProcessingStage) error {
+// Load all the inital configuration settings for the lambda
+func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
+
+	cfg = &handlerConfig{}
+
+	var err error
+
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		slog.Error("failed to load the AWS config", "error", err)
+		return nil, err
+	}
+
+	cfg.store, err = database.NewDocumentStore(ctx)
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		return nil, err
+	}
+
+	cfg.dc, err = google.NewGoogleDrive(ctx)
+	if err != nil {
+		//
+		slog.Error("Failed to initialize the Google Drive service context", "error", err)
+		return nil, err
+	}
+
+	cfg.s3Client = s3.NewFromConfig(awsCfg)
+
+	return cfg, nil
+}
+
+// Ensure that the configuration settings are only loaded once
+func initLambda(ctx context.Context) error {
+	var err error
+	initOnce.Do(func() {
+		slog.Debug(">>initLambda")
+		defer slog.Debug("<<initLambda")
+
+		cfg, err = loadConfiguration(ctx)
+	})
+
+	return err
+}
+
+// TODO: doesn't feel right updating the stage in here
+func (cfg *handlerConfig) copyDocument(ctx context.Context, document *types.Document, stage *types.DocumentProcessingStage) error {
+	// get a reader from Google Drive for the document
 	reader, err := cfg.dc.GetReader(document)
 	if err != nil {
 		slog.Error("Failed to get a reader for the document", "error", err)
@@ -43,7 +85,7 @@ func (cfg *downloadConfig) copyDocument(document *types.Document, stage *types.D
 	defer reader.Close()
 
 	// get the name of the original document w/o extension
-	documentName := util.GetDocumentName(document.Name)
+	documentName := util.GetNamePart(document.Name)
 
 	// Save the original filename with the stage
 	stage.OriginalFileName = document.Name
@@ -55,7 +97,7 @@ func (cfg *downloadConfig) copyDocument(document *types.Document, stage *types.D
 	stage.S3Key = fmt.Sprintf("%s/%s", stage.Stage, stage.StageFileName)
 
 	// store the file for the stage
-	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+	_, err = cfg.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
 		Key:           aws.String(stage.S3Key),
 		Body:          reader,
@@ -70,168 +112,55 @@ func (cfg *downloadConfig) copyDocument(document *types.Document, stage *types.D
 	return nil
 }
 
-func queryWatchChannelForRequest(request events.APIGatewayProxyRequest) (*types.WatchChannel, error) {
-	resourceState := request.Headers["X-Goog-Resource-State"]
-	channelID := request.Headers["X-Goog-Channel-ID"]
-	resourceID := request.Headers["X-Goog-Resource-ID"]
+func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
+	slog.Debug(">>process")
+	defer slog.Debug("<<process")
 
-	// If we receive a 'sync' notification, ignore it for now.
-	// We could use this for initialzing the state of the vault?
-	if resourceState != "add" {
-		slog.Debug("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
-		return nil, fmt.Errorf("invalid file notification")
-	}
-
-	// query the watch channel based on the channelID
-	wc, err := cfg.store.GetWatchChannelByChannel(channelID)
-	if err != nil {
-		slog.Error("Failed to find a registration for the channel", "channelID", channelID, "error", err)
-		return nil, fmt.Errorf("invalid file notification")
-
-	}
-
-	// verify the resourceID
-	if resourceID != wc.ResourceID {
-		slog.Error("ResourceID for the channel is not valid", "channelID", channelID, "resourceID", resourceID, "error", err)
-		return nil, fmt.Errorf("invalid file notification")
-	}
-
-	return &wc, nil
-}
-
-func (cfg *downloadConfig) processDocuments(documents []*types.Document) error {
-	// Create a Step Function Client to start the state machine later
-	sfnClient := sfn.NewFromConfig(cfg.awsCfg)
-
-	// loop through the documents that have been uploaded
-	for _, document := range documents {
-		slog.Info("process document", "docName", document.Name)
-
-		// Save the Google Drive document information
-		err := cfg.store.InsertDocument(*document)
-		if err != nil {
-			slog.Error("Failed to save the document metadata", "docName", document.Name, "error", err)
-			return err
-		}
-
-		// Start document stage to in-progress
-		stage, err := cfg.store.StartDocumentStage(document.ID, types.DOCUMENT_STAGE_DOWNLOADED, document.Name)
-		if err != nil {
-			slog.Error("Failed to save the document processing stage", "docName", document.Name, "error", err)
-			return err
-		}
-
-		// copy the original document to S3
-		err = cfg.copyDocument(document, &stage)
-		if err != nil {
-			return err
-		}
-
-		// update the document stage to complete
-		err = cfg.store.CompleteDocumentStage(stage)
-		if err != nil {
-			slog.Error("Failed to update the processing stage as complete", "docName", document.Name, "error", err)
-			return err
-		}
-
-		input, err := util.BuildStageInput(document.ID, types.DOCUMENT_STAGE_DOWNLOADED)
-		if err != nil {
-			slog.Error("Failed to build the stage input for the next stage", "docName", document.Name, "error", err)
-			return err
-		}
-
-		slog.Info("downloadLambda stage output", "event", input)
-
-		// start the state machine execution
-		_, err = sfnClient.StartExecution(context.TODO(), &sfn.StartExecutionInput{
-			StateMachineArn: &cfg.stateMachineARN,
-			Input:           aws.String(input),
-		})
-
-		if err != nil {
-			slog.Error("Failed to start the state machine execution", "docName", document.Name, "error", err)
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (cfg *downloadConfig) processFileNotification(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	slog.Debug(">>processFileNotification")
-	defer slog.Debug("<<processFileNotification")
+	ret := types.DocumentStep{}
 
 	var err error
 
-	// Create a storage client if we don't have one
-	cfg.store, err = util.VerifyStoreConnection(cfg.store)
+	if err := initLambda(ctx); err != nil {
+		slog.Error("Failed to initialize the lambda", "error", err)
+		return ret, err
+	}
+
+	// Query the document from Google Drive
+	document, err := cfg.store.GetDocument(ctx, event.DocumentID)
 	if err != nil {
-		slog.Error("Failed to verify the DynamoDB client", "error", err)
-		return util.BuildGatewayResponse("Failed to initialize the connection to the database", http.StatusInternalServerError)
+		slog.Error("Failed to query the document to download", "id", event.DocumentID, "error", err)
+		return ret, err
 	}
 
-	// Create a Google Drive service if we don't have one
-	cfg.dc, err = util.VerifyDriveContext(cfg.dc, cfg.store)
+	// create the download stage entry
+	stage, err := cfg.store.StartDocumentStage(ctx, document.ID, types.DOCUMENT_STAGE_DOWNLOAD, document.Name)
 	if err != nil {
-		return util.BuildGatewayResponse("Failed to initialize the Google Drive API context", http.StatusInternalServerError)
+		slog.Error("Failed to start the Mathpix document processing stage", "docName", document.Name, "error", err)
+		return ret, err
 	}
 
-	// Parse the folderID from the gateway request
-	wc, err := queryWatchChannelForRequest(request)
+	// copy the original document to S3
+	err = cfg.copyDocument(ctx, document, stage)
 	if err != nil {
-		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
+		return ret, err
 	}
 
-	// Check for new or modified files
-	documents, err := cfg.dc.QueryFiles(wc.FolderID)
+	err = cfg.store.CompleteDocumentStage(ctx, stage)
 	if err != nil {
-		slog.Error("Call to QueryFiles failed", "error", err)
-		return util.BuildGatewayResponse("Failed to query for new files", http.StatusInternalServerError)
+		slog.Error("Failed to update the processing stage as complete", "docName", document.Name, "error", err)
+		return ret, err
 	}
 
-	// Check if there are documents to process
-	if len(documents) == 0 {
-		return util.BuildGatewayResponse("No documents to process", http.StatusOK)
-	}
+	ret.NotificationID = event.NotificationID
+	ret.DocumentID = document.ID
+	ret.Stage = types.DOCUMENT_STAGE_DOWNLOAD
 
-	// process any documents that were moved to the watch folder
-	err = cfg.processDocuments(documents)
-	if err != nil {
-		slog.Error("Failed to process the documents in Google Drive", "error", err)
-		return util.BuildGatewayResponse("Failed to process the documents", http.StatusInternalServerError)
-	}
-
-	return util.BuildGatewayResponse("Processing new file", http.StatusOK)
-}
-
-func init() {
-	slog.Debug(">>init")
-	defer slog.Debug("<<init")
-
-	var err error
-	cfg = &downloadConfig{}
-
-	cfg.awsCfg, err = config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		slog.Error("Failed to load the AWS config", "error", err)
-		os.Exit(1)
-	}
-
-	cfg.stateMachineARN = os.Getenv("STATE_MACHINE_ARN")
-	if cfg.stateMachineARN == "" {
-		slog.Error("Failed to get the state machine ARN", "error", err)
-		os.Exit(1)
-	}
-
-	cfg.s3Client = s3.NewFromConfig(cfg.awsCfg)
-
+	return ret, nil
 }
 
 func main() {
 	slog.Debug(">>main")
 	defer slog.Debug("<<main")
 
-	lambda.Start(func(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-		return cfg.processFileNotification(request)
-	})
+	lambda.Start(process)
 }

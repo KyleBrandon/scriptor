@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
-	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
@@ -16,21 +18,73 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-type uploadConfig struct {
-	store    database.ScriptorStore
-	dc       *google.GoogleDriveContext
-	awsCfg   aws.Config
-	s3Client *s3.Client
+type handlerConfig struct {
+	store           database.DocumentStore
+	dc              *google.GoogleDriveContext
+	folderLocations *types.GoogleFolderDefaultLocations
+	s3Client        *s3.Client
 }
 
 var (
 	BucketName string = types.S3_BUCKET_NAME
-	cfg        *uploadConfig
+	initOnce   sync.Once
+	cfg        *handlerConfig
 )
 
-func (cfg *uploadConfig) getFileReaderForStage(s3FileKey string) (io.ReadCloser, error) {
+// Load all the inital configuration settings for the lambda
+func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 
-	resp, err := cfg.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+	cfg = &handlerConfig{}
+
+	var err error
+
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		slog.Error("failed to load the AWS config", "error", err)
+		return nil, err
+	}
+
+	// Get the folder locations from secret manager
+	cfg.folderLocations, err = util.GetDefaultFolderLocations(ctx, awsCfg)
+	if err != nil {
+		slog.Error("Failed to read the default folder locations for Google Drive", "error", err)
+		return nil, err
+	}
+
+	cfg.s3Client = s3.NewFromConfig(awsCfg)
+
+	cfg.store, err = database.NewDocumentStore(ctx)
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		return nil, err
+	}
+
+	cfg.dc, err = google.NewGoogleDrive(ctx)
+	if err != nil {
+		//
+		slog.Error("Failed to initialize the Google Drive service context", "error", err)
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+// Ensure that the configuration settings are only loaded once
+func initLambda(ctx context.Context) error {
+	var err error
+	initOnce.Do(func() {
+		slog.Debug(">>initLambda")
+		defer slog.Debug("<<initLambda")
+
+		cfg, err = loadConfiguration(ctx)
+	})
+
+	return err
+}
+
+func (cfg *handlerConfig) getFileReaderForStage(ctx context.Context, s3FileKey string) (io.ReadCloser, error) {
+
+	resp, err := cfg.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(types.S3_BUCKET_NAME),
 		Key:    aws.String(s3FileKey),
 	})
@@ -43,10 +97,10 @@ func (cfg *uploadConfig) getFileReaderForStage(s3FileKey string) (io.ReadCloser,
 
 }
 
-func (cfg *uploadConfig) saveStageToFolder(docStage types.DocumentProcessingStage, folderID string) error {
+func (cfg *handlerConfig) saveStageToFolder(ctx context.Context, docStage *types.DocumentProcessingStage, folderID, baseName string) error {
 
 	// Get a reader from the S3 file location
-	docReader, err := cfg.getFileReaderForStage(docStage.S3Key)
+	docReader, err := cfg.getFileReaderForStage(ctx, docStage.S3Key)
 	if err != nil {
 		slog.Error("Failed to get file reader for the ChatGPT processed document", "error", err)
 		return err
@@ -54,8 +108,12 @@ func (cfg *uploadConfig) saveStageToFolder(docStage types.DocumentProcessingStag
 
 	defer docReader.Close()
 
+	// Stages append a timestamp to file names for processing and we want to
+	// save the file with the original file name and the extension from the stage
+	fileName := fmt.Sprintf("%s%s", baseName, filepath.Ext(docStage.StageFileName))
+
 	// Save the file to the destination folder
-	err = cfg.dc.SaveFile(docStage.StageFileName, folderID, docReader)
+	err = cfg.dc.SaveFile(fileName, folderID, docReader)
 	if err != nil {
 		slog.Error("Failed to save the original document file to the destination folder", "error", err)
 		return err
@@ -64,127 +122,78 @@ func (cfg *uploadConfig) saveStageToFolder(docStage types.DocumentProcessingStag
 	return nil
 }
 
-func (cfg *uploadConfig) process(ctx context.Context, event types.DocumentStep) error {
+func process(ctx context.Context, event types.DocumentStep) error {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
-	slog.Info("uploadLambda stage input", "input", event)
-
-	var err error
-	cfg.store, err = util.VerifyStoreConnection(cfg.store)
-	if err != nil {
-		slog.Error("Failed to verify the DynamoDB client", "error", err)
-		return err
-	}
-
-	cfg.dc, err = util.VerifyDriveContext(cfg.dc, cfg.store)
-	if err != nil {
+	if err := initLambda(ctx); err != nil {
+		slog.Error("Failed to initialize the lambda", "error", err)
 		return err
 	}
 
 	// query the previous stage information
-	prevStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
+	prevStage, err := cfg.store.GetDocumentStage(ctx, event.DocumentID, event.Stage)
 	if err != nil {
-		slog.Error("Failed to get the previous stage information", "id", event.ID, "stage", event.Stage, "error", err)
+		slog.Error("Failed to get the previous stage information", "id", event.DocumentID, "stage", event.Stage, "error", err)
 		return err
 	}
 
 	// Start the document upload stage
-	uploadStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_UPLOAD, prevStage.OriginalFileName)
+	uploadStage, err := cfg.store.StartDocumentStage(ctx, event.DocumentID, types.DOCUMENT_STAGE_UPLOAD, prevStage.OriginalFileName)
 	if err != nil {
 		slog.Error("Failed to start the Mathpix document processing stage", "error", err)
 		return err
 	}
 
-	// Get the folder locations from secret manager
-	folderLocations, err := util.GetDefaultFolderLocations()
+	// query the download stage information stage information to get the original file
+	downloadedStage, err := cfg.store.GetDocumentStage(ctx, event.DocumentID, types.DOCUMENT_STAGE_DOWNLOAD)
 	if err != nil {
-		slog.Error("Failed to read the default folder locations for Google Drive", "error", err)
+		slog.Error("Failed to get the Document Downloaded Stage information", "id", event.DocumentID, "error", err)
 		return err
 	}
 
-	// query the previous stage information
-	downloadedStage, err := cfg.store.GetDocumentStage(event.ID, types.DOCUMENT_STAGE_DOWNLOADED)
+	// get the document record from DynamoDB
+	document, err := cfg.store.GetDocument(ctx, event.DocumentID)
 	if err != nil {
-		slog.Error("Failed to get the Document Downloaded Stage information", "id", event.ID, "error", err)
+		slog.Error("Failed to get the document information to archive", "id", event.DocumentID, "error", err)
 		return err
 	}
+
+	baseName := util.GetNamePart(document.Name)
 
 	// Save the original PDF file to the destination folder
-	err = cfg.saveStageToFolder(downloadedStage, folderLocations.DestFolderID)
+	err = cfg.saveStageToFolder(ctx, downloadedStage, cfg.folderLocations.DestFolderID, baseName)
 	if err != nil {
-		slog.Error("Failed to save the original PDF to the destination folder", "id", event.ID, "folderID", folderLocations.FolderID, "error", err)
+		slog.Error("Failed to save the original PDF to the destination folder", "id", event.DocumentID, "folderID", cfg.folderLocations.FolderID, "error", err)
 		return err
 	}
 
 	// Save the output from the last stage to the destination folder
-	err = cfg.saveStageToFolder(prevStage, folderLocations.DestFolderID)
+	err = cfg.saveStageToFolder(ctx, prevStage, cfg.folderLocations.DestFolderID, baseName)
 	if err != nil {
-		slog.Error("Failed to save the final output stage to the destination folder", "id", event.ID, "stage", prevStage.Stage, "folderID", folderLocations.FolderID, "error", err)
+		slog.Error("Failed to save the final output stage to the destination folder", "id", event.DocumentID, "stage", prevStage.Stage, "folderID", cfg.folderLocations.FolderID, "error", err)
 		return err
 	}
 
-	document, err := cfg.store.GetDocument(event.ID)
+	err = cfg.dc.Archive(document.GoogleID, cfg.folderLocations.ArchiveFolderID)
 	if err != nil {
-		slog.Error("Failed to get the document information to archive", "id", event.ID, "error", err)
-		return err
-	}
-
-	err = cfg.dc.Archive(&document, folderLocations.ArchiveFolderID)
-	if err != nil {
-		slog.Error("Failed to archive the document", "id", event.ID, "error", err)
+		slog.Error("Failed to archive the document", "id", event.DocumentID, "folderID", cfg.folderLocations.ArchiveFolderID, "error", err)
 		return err
 	}
 
 	// Update the stage to complete
-	err = cfg.store.CompleteDocumentStage(uploadStage)
+	err = cfg.store.CompleteDocumentStage(ctx, uploadStage)
 	if err != nil {
 		slog.Error("Failed to update the processing stage as complete", "error", err)
 		return err
 	}
 
-	slog.Info("uploadLambda stage complete")
-
 	return nil
-}
-
-func init() {
-	slog.Debug(">>init")
-	defer slog.Debug("<<init")
-
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		slog.Error("Failed to load the AWS config", "error", err)
-		os.Exit(1)
-	}
-
-	store, err := database.NewDynamoDBClient()
-	if err != nil {
-		slog.Error("Failed to configure the DynamoDB client", "error", err)
-		os.Exit(1)
-	}
-
-	dc, err := google.NewGoogleDrive(store)
-	if err != nil {
-		//
-		slog.Error("Failed to initialize the Google Drive service context", "error", err)
-		os.Exit(1)
-	}
-
-	s3Client := s3.NewFromConfig(awsCfg)
-
-	cfg = &uploadConfig{
-		store,
-		dc,
-		awsCfg,
-		s3Client,
-	}
-
 }
 
 func main() {
 	slog.Debug(">>main")
 	defer slog.Debug("<<main")
 
-	lambda.Start(cfg.process)
+	lambda.Start(process)
 }

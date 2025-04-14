@@ -10,7 +10,6 @@ import (
 )
 
 func (cfg *CdkScriptorConfig) NewWebHookRegisterStack(id string) awscdk.Stack {
-
 	stack := awscdk.NewStack(cfg.App, &id, &cfg.Props.StackProps)
 
 	myFunction := awslambda.NewFunction(stack, jsii.String("scriptorWebhookRegisterLambda"), &awslambda.FunctionProps{
@@ -22,12 +21,17 @@ func (cfg *CdkScriptorConfig) NewWebHookRegisterStack(id string) awscdk.Stack {
 		},
 	})
 
-	// grant the lambda permission to read the secrets
+	// grant the lambda permission to read the Google Drive secret
 	cfg.GoogleServiceKeySecret.GrantRead(myFunction, nil)
+
+	// grant the lambda permission to read the default folder information
 	cfg.DefaultFoldersSecret.GrantRead(myFunction, nil)
 
 	// grant the lambda permissions to read/write the watch channel table
 	cfg.watchChannelTable.GrantReadWriteData(myFunction)
+
+	// grant the lambda permissions to read/write the watch channel lock table
+	cfg.watchChannelLockTable.GrantReadWriteData(myFunction)
 
 	// setup an event to trigger the lambda every 4 hours
 	rule := awsevents.NewRule(stack, jsii.String("WebhookRegisterSchedule"), &awsevents.RuleProps{

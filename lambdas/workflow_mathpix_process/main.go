@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
-	"os"
+	"sync"
 	"time"
 
 	"github.com/KyleBrandon/scriptor/lambdas/util"
@@ -19,7 +19,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 )
 
 // Mathpix API endpoint
@@ -49,8 +48,8 @@ type (
 		PdfMarkdown string `json:"pdf_md,omitempty"`
 	}
 
-	mathpixConfig struct {
-		store         database.ScriptorStore
+	handlerConfig struct {
+		store         database.DocumentStore
 		s3Client      *s3.Client
 		mathpixAppID  string
 		mathpixAppKey string
@@ -59,10 +58,58 @@ type (
 
 var (
 	BucketName string = types.S3_BUCKET_NAME
-	cfg        *mathpixConfig
+	initOnce   sync.Once
+	cfg        *handlerConfig
 )
 
-func (cfg *mathpixConfig) doRequestAndReadAll(req *http.Request) ([]byte, error) {
+// Load all the inital configuration settings for the lambda
+func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
+
+	cfg = &handlerConfig{}
+
+	var err error
+
+	// create a new document storage client
+	cfg.store, err = database.NewDocumentStore(ctx)
+	if err != nil {
+		slog.Error("Failed to configure the DynamoDB client", "error", err)
+		return nil, err
+	}
+
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		slog.Error("Failed to load the AWS config", "error", err)
+		return nil, err
+	}
+
+	cfg.s3Client = s3.NewFromConfig(awsCfg)
+
+	mathpixSecrets, err := util.LoadMathpixSecrets(ctx, awsCfg)
+	if err != nil {
+		slog.Error("Failed to load the Mathpix secrets from Secret Manager", "error", err)
+		return nil, err
+	}
+
+	cfg.mathpixAppID = mathpixSecrets.AppID
+	cfg.mathpixAppKey = mathpixSecrets.AppKey
+
+	return cfg, nil
+}
+
+// Ensure that the configuration settings are only loaded once
+func initLambda(ctx context.Context) error {
+	var err error
+	initOnce.Do(func() {
+		slog.Debug(">>initLambda")
+		defer slog.Debug("<<initLambda")
+
+		cfg, err = loadConfiguration(ctx)
+	})
+
+	return err
+}
+
+func (cfg *handlerConfig) doRequestAndReadAll(req *http.Request) ([]byte, error) {
 
 	// Send request
 	client := &http.Client{}
@@ -86,7 +133,7 @@ func (cfg *mathpixConfig) doRequestAndReadAll(req *http.Request) ([]byte, error)
 	return respBody, nil
 }
 
-func (cfg *mathpixConfig) newRequest(method string, url string, body io.Reader) (*http.Request, error) {
+func (cfg *handlerConfig) newRequest(method string, url string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
@@ -99,7 +146,7 @@ func (cfg *mathpixConfig) newRequest(method string, url string, body io.Reader) 
 }
 
 // PollForResults polls Mathpix API for PDF processing status
-func (cfg *mathpixConfig) pollForResults(pdfID string) error {
+func (cfg *handlerConfig) pollForResults(pdfID string) error {
 	pollURL := fmt.Sprintf("%s/%s", MathpixPdfApiURL, pdfID)
 
 	// TODO: This would run forever
@@ -139,7 +186,7 @@ func (cfg *mathpixConfig) pollForResults(pdfID string) error {
 	}
 }
 
-func (cfg *mathpixConfig) queryConversionResults(pdfID string) ([]byte, error) {
+func (cfg *handlerConfig) queryConversionResults(pdfID string) ([]byte, error) {
 	resultsURL := fmt.Sprintf("%s/%s.md", MathpixPdfApiURL, pdfID)
 
 	req, err := cfg.newRequest("GET", resultsURL, nil)
@@ -157,9 +204,9 @@ func (cfg *mathpixConfig) queryConversionResults(pdfID string) ([]byte, error) {
 	return body, nil
 }
 
-func (cfg *mathpixConfig) sendDocumentToMathpix(prevStage types.DocumentProcessingStage) (string, error) {
+func (cfg *handlerConfig) sendDocumentToMathpix(ctx context.Context, prevStage *types.DocumentProcessingStage) (string, error) {
 	// get the input file form S3
-	resp, err := cfg.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+	resp, err := cfg.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(types.S3_BUCKET_NAME),
 		Key:    aws.String(prevStage.S3Key),
 	})
@@ -219,39 +266,34 @@ func (cfg *mathpixConfig) sendDocumentToMathpix(prevStage types.DocumentProcessi
 	return uploadResp.PdfID, nil
 }
 
-func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
+func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
-	slog.Info("mathpixLambda stage input", "event", event)
-
 	ret := types.DocumentStep{}
 
+	if err := initLambda(ctx); err != nil {
+		slog.Error("Failed to initialize the lambda", "error", err)
+		return ret, err
+	}
+
 	var err error
-	cfg.store, err = util.VerifyStoreConnection(cfg.store)
-	if err != nil {
-		slog.Error("Failed to verify the DynamoDB client", "error", err)
-		return ret, err
-	}
-
 	// query the previous stage information
-	prevStage, err := cfg.store.GetDocumentStage(event.ID, event.Stage)
+	prevStage, err := cfg.store.GetDocumentStage(ctx, event.DocumentID, event.Stage)
 	if err != nil {
-		slog.Error("Failed to get the previous stage information", "id", event.ID, "stage", event.Stage, "error", err)
+		slog.Error("Failed to get the previous stage information", "id", event.DocumentID, "stage", event.Stage, "error", err)
 		return ret, err
 	}
-
-	slog.Info("process document", "docName", prevStage.OriginalFileName)
 
 	// create the mathpix stage entry
-	mathpixStage, err := cfg.store.StartDocumentStage(event.ID, types.DOCUMENT_STAGE_MATHPIX, prevStage.OriginalFileName)
+	mathpixStage, err := cfg.store.StartDocumentStage(ctx, event.DocumentID, types.DOCUMENT_STAGE_MATHPIX, prevStage.OriginalFileName)
 	if err != nil {
 		slog.Error("Failed to start the Mathpix document processing stage", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
 	// Upload PDF to Mathpix
-	pdfID, err := cfg.sendDocumentToMathpix(prevStage)
+	pdfID, err := cfg.sendDocumentToMathpix(ctx, prevStage)
 	if err != nil {
 		slog.Error("Error uploading PDF", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
@@ -272,11 +314,12 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 	}
 
 	// Get the original document name w/o extension
-	documentName := util.GetDocumentName(prevStage.OriginalFileName)
+	documentName := util.GetNamePart(prevStage.OriginalFileName)
 
+	// Save mathpix markdown to S3
 	mathpixStage.StageFileName = fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
 	mathpixStage.S3Key = fmt.Sprintf("%s/%s", mathpixStage.Stage, mathpixStage.StageFileName)
-	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+	_, err = cfg.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
 		Key:           aws.String(mathpixStage.S3Key),
 		Body:          bytes.NewReader(body),
@@ -290,84 +333,23 @@ func (cfg *mathpixConfig) process(ctx context.Context, event types.DocumentStep)
 
 	// Update the stage to complete
 
-	err = cfg.store.CompleteDocumentStage(mathpixStage)
+	err = cfg.store.CompleteDocumentStage(ctx, mathpixStage)
 	if err != nil {
 		slog.Error("Failed to update the processing stage as complete", "docName", prevStage.OriginalFileName, "error", err)
 		return ret, err
 	}
 
 	// pass the step info to the next stage
-	ret.ID = event.ID
+	ret.NotificationID = event.NotificationID
+	ret.DocumentID = event.DocumentID
 	ret.Stage = types.DOCUMENT_STAGE_MATHPIX
 
-	slog.Info("mathpixLambda stage output", "event", ret)
-
 	return ret, nil
-}
-
-func getMathpixKeys() (*types.MathpixSecrets, error) {
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		os.Exit(1)
-	}
-
-	svc := secretsmanager.NewFromConfig(awsCfg)
-
-	secretName := types.MATHPIX_SECRETS
-	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
-
-	result, err := svc.GetSecretValue(context.TODO(), input)
-	if err != nil {
-		return nil, err
-	}
-
-	var mathpixSecrets types.MathpixSecrets
-
-	err = json.Unmarshal([]byte(*result.SecretString), &mathpixSecrets)
-	if err != nil {
-		return nil, err
-	}
-
-	return &mathpixSecrets, nil
-}
-
-func init() {
-	slog.Debug(">>init")
-	defer slog.Debug("<<init")
-
-	awsCfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		slog.Error("Failed to load the AWS config", "error", err)
-		os.Exit(1)
-	}
-
-	store, err := database.NewDynamoDBClient()
-	if err != nil {
-		slog.Error("Failed to configure the DynamoDB client", "error", err)
-		os.Exit(1)
-	}
-
-	mathpixKeys, err := getMathpixKeys()
-	if err != nil {
-		slog.Error("Failed to get the Mathpix keys", "error", err)
-		os.Exit(1)
-	}
-
-	mathpixAppID := mathpixKeys.AppID
-	mathpixAppKey := mathpixKeys.AppKey
-	s3Client := s3.NewFromConfig(awsCfg)
-
-	cfg = &mathpixConfig{
-		store,
-		s3Client,
-		mathpixAppID,
-		mathpixAppKey,
-	}
 }
 
 func main() {
 	slog.Debug(">>main")
 	defer slog.Debug("<<main")
 
-	lambda.Start(cfg.process)
+	lambda.Start(process)
 }
