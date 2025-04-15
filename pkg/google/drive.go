@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -141,12 +140,6 @@ func (gd *GoogleDriveContext) QueryChanges(
 
 		// build a Document from each file that's changed
 		for _, change := range changes.Changes {
-			util.Assert(
-				change.FileId,
-				change.File.Id,
-				"expect these to be the same",
-			)
-
 			// ignore drive changes
 			if change.ChangeType == "drive" || change.Removed ||
 				change.File.Trashed {
