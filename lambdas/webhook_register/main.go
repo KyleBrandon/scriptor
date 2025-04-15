@@ -43,7 +43,9 @@ func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 
 	cfg.webhookURL = os.Getenv("WEBHOOK_URL")
 	if cfg.webhookURL == "" {
-		return nil, fmt.Errorf("failed to read the webhook URL from the environment")
+		return nil, fmt.Errorf(
+			"failed to read the webhook URL from the environment",
+		)
 	}
 
 	cfg.store, err = database.NewWatchChannelStore(ctx)
@@ -55,7 +57,11 @@ func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 	cfg.dc, err = google.NewGoogleDrive(ctx)
 	if err != nil {
 		//
-		slog.Error("Failed to initialize the Google Drive service context", "error", err)
+		slog.Error(
+			"Failed to initialize the Google Drive service context",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
@@ -98,7 +104,9 @@ func (cfg *handlerConfig) initializeDefaultWatchChannels() ([]*types.WatchChanne
 	return wcs, nil
 }
 
-func (cfg *handlerConfig) getChannelsToRegister(watchChannels []*types.WatchChannel) ([]*types.WatchChannel, error) {
+func (cfg *handlerConfig) getChannelsToRegister(
+	watchChannels []*types.WatchChannel,
+) ([]*types.WatchChannel, error) {
 
 	register := make([]*types.WatchChannel, 0)
 
@@ -115,7 +123,8 @@ func (cfg *handlerConfig) getChannelsToRegister(watchChannels []*types.WatchChan
 			"channelExpires", expiresTime,
 			"currentURL", cfg.webhookURL,
 			"channelURL", wc.WebhookUrl)
-		if wc.ExpiresAt <= channelRegisterTime || wc.WebhookUrl != cfg.webhookURL {
+		if wc.ExpiresAt <= channelRegisterTime ||
+			wc.WebhookUrl != cfg.webhookURL {
 			// we need to re-register this channel
 			slog.Info("channel has expired or the webhook URL has changed")
 			register = append(register, wc)
@@ -136,7 +145,11 @@ func process(ctx context.Context) error {
 
 	watchChannels, err := cfg.store.GetWatchChannels(ctx)
 	if err != nil {
-		slog.Error("Failed to get the list of active watch channels", "error", err)
+		slog.Error(
+			"Failed to get the list of active watch channels",
+			"error",
+			err,
+		)
 		return err
 	}
 
@@ -146,7 +159,11 @@ func process(ctx context.Context) error {
 	if len(watchChannels) == 0 {
 		registerWatchChannels, err = cfg.initializeDefaultWatchChannels()
 		if err != nil {
-			slog.Error("Failed to build the default watch channels", "error", err)
+			slog.Error(
+				"Failed to build the default watch channels",
+				"error",
+				err,
+			)
 			return err
 		}
 
@@ -162,20 +179,40 @@ func process(ctx context.Context) error {
 	for _, wc := range registerWatchChannels {
 		err = cfg.dc.CreateWatchChannel(wc, cfg.webhookURL)
 		if err != nil {
-			slog.Error("Failed to create the watch channel", "folderID", wc.FolderID, "channelID", wc.ChannelID, "error", err)
+			slog.Error(
+				"Failed to create the watch channel",
+				"folderID",
+				wc.FolderID,
+				"channelID",
+				wc.ChannelID,
+				"error",
+				err,
+			)
 			continue
 		}
 
 		// Update the watch channel in the database
 		err = cfg.store.UpdateWatchChannel(ctx, wc)
 		if err != nil {
-			slog.Error("Failed to create or update the watch channel", "folderID", wc.FolderID, "channelID", wc.ChannelID, "error", err)
+			slog.Error(
+				"Failed to create or update the watch channel",
+				"folderID",
+				wc.FolderID,
+				"channelID",
+				wc.ChannelID,
+				"error",
+				err,
+			)
 			continue
 		}
 
 		token, err := cfg.dc.GetChangesStartToken()
 		if err != nil {
-			slog.Error("Failed to get a Google Drive changes start token", "error", err)
+			slog.Error(
+				"Failed to get a Google Drive changes start token",
+				"error",
+				err,
+			)
 			continue
 		}
 

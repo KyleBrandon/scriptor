@@ -26,10 +26,25 @@ type (
 	DocumentStore interface {
 		InsertDocument(ctx context.Context, document *stypes.Document) error
 		GetDocument(ctx context.Context, id string) (*stypes.Document, error)
-		GetDocumentByGoogleID(ctx context.Context, googleFileID string) (*stypes.Document, error)
-		GetDocumentStage(ctx context.Context, id string, stage string) (*stypes.DocumentProcessingStage, error)
-		StartDocumentStage(ctx context.Context, id string, stage string, originalFileName string) (*stypes.DocumentProcessingStage, error)
-		CompleteDocumentStage(ctx context.Context, stage *stypes.DocumentProcessingStage) error
+		GetDocumentByGoogleID(
+			ctx context.Context,
+			googleFileID string,
+		) (*stypes.Document, error)
+		GetDocumentStage(
+			ctx context.Context,
+			id string,
+			stage string,
+		) (*stypes.DocumentProcessingStage, error)
+		StartDocumentStage(
+			ctx context.Context,
+			id string,
+			stage string,
+			originalFileName string,
+		) (*stypes.DocumentProcessingStage, error)
+		CompleteDocumentStage(
+			ctx context.Context,
+			stage *stypes.DocumentProcessingStage,
+		) error
 	}
 
 	DocumentStoreContext struct {
@@ -38,11 +53,26 @@ type (
 
 	WatchChannelStore interface {
 		GetWatchChannels(ctx context.Context) ([]*stypes.WatchChannel, error)
-		UpdateWatchChannel(ctx context.Context, watchChannel *stypes.WatchChannel) error
-		GetWatchChannelByID(ctx context.Context, channelID string) (*stypes.WatchChannel, error)
-		CreateChangesToken(ctx context.Context, channelID, startToken string) error
-		AcquireChangesToken(ctx context.Context, channelID string) (string, error)
-		ReleaseChangesToken(ctx context.Context, channelID, newStartToken string) error
+		UpdateWatchChannel(
+			ctx context.Context,
+			watchChannel *stypes.WatchChannel,
+		) error
+		GetWatchChannelByID(
+			ctx context.Context,
+			channelID string,
+		) (*stypes.WatchChannel, error)
+		CreateChangesToken(
+			ctx context.Context,
+			channelID, startToken string,
+		) error
+		AcquireChangesToken(
+			ctx context.Context,
+			channelID string,
+		) (string, error)
+		ReleaseChangesToken(
+			ctx context.Context,
+			channelID, newStartToken string,
+		) error
 	}
 
 	WatchChannelStoreContext struct {
@@ -54,7 +84,10 @@ var (
 	ErrDocumentNotFound = errors.New("document not found")
 )
 
-func buildUpdateExpression(input map[string]types.AttributeValue, excludeKeys []string) (string, map[string]types.AttributeValue) {
+func buildUpdateExpression(
+	input map[string]types.AttributeValue,
+	excludeKeys []string,
+) (string, map[string]types.AttributeValue) {
 	updateExpr := "SET "
 	exprValues := map[string]types.AttributeValue{}
 	i := 0

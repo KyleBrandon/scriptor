@@ -89,7 +89,10 @@ func initLambda(ctx context.Context) error {
 	return err
 }
 
-func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
+func process(
+	ctx context.Context,
+	event types.DocumentStep,
+) (types.DocumentStep, error) {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
@@ -101,15 +104,38 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 	}
 
 	// query the previous stage information
-	prevStage, err := cfg.store.GetDocumentStage(ctx, event.DocumentID, event.Stage)
+	prevStage, err := cfg.store.GetDocumentStage(
+		ctx,
+		event.DocumentID,
+		event.Stage,
+	)
 	if err != nil {
-		slog.Error("Failed to get the previous stage information", "id", event.DocumentID, "stage", event.Stage, "error", err)
+		slog.Error(
+			"Failed to get the previous stage information",
+			"id",
+			event.DocumentID,
+			"stage",
+			event.Stage,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
-	chatgptStage, err := cfg.store.StartDocumentStage(ctx, event.DocumentID, types.DOCUMENT_STAGE_CHATGPT, prevStage.OriginalFileName)
+	chatgptStage, err := cfg.store.StartDocumentStage(
+		ctx,
+		event.DocumentID,
+		types.DOCUMENT_STAGE_CHATGPT,
+		prevStage.OriginalFileName,
+	)
 	if err != nil {
-		slog.Error("Failed to save the document processing stage", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Failed to save the document processing stage",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
@@ -118,7 +144,13 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 		Key:    aws.String(prevStage.S3Key),
 	})
 	if err != nil {
-		slog.Error("Failed to get the document from S3", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Failed to get the document from S3",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
@@ -126,7 +158,13 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 
 	content, err := io.ReadAll(resp.Body)
 	if err != err {
-		slog.Error("Failed to read the input document to clean up", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Failed to read the input document to clean up",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
@@ -146,7 +184,13 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 		},
 	)
 	if err != nil {
-		slog.Error("ChatGPT API error", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"ChatGPT API error",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
@@ -156,11 +200,17 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 	// For some reason ChatGPT will occasionally surround the entire processed output with
 	// a Markdown code block. Check to see if the document is surrounded in a code block.
 	// If so, remove it.
-	cleanedMarkdown := strings.TrimPrefix(strings.TrimSuffix(string(buffer), "```"), "```markdown")
+	cleanedMarkdown := strings.TrimPrefix(
+		strings.TrimSuffix(string(buffer), "```"),
+		"```markdown",
+	)
 
 	// TODO: This should be a configuration
 	// build the header and footer for the note
-	header := fmt.Sprintf(HEADER_TEMPLATE, util.GetNamePart(prevStage.OriginalFileName))
+	header := fmt.Sprintf(
+		HEADER_TEMPLATE,
+		util.GetNamePart(prevStage.OriginalFileName),
+	)
 	footer := fmt.Sprintf(FOOTER_TEMPLATE, prevStage.OriginalFileName)
 
 	// We want to append a link to the original scanned PDF at the end of the note
@@ -172,8 +222,16 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 	// Get the original document name w/o extension
 	documentName := util.GetNamePart(prevStage.OriginalFileName)
 
-	chatgptStage.StageFileName = fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
-	chatgptStage.S3Key = fmt.Sprintf("%s/%s", chatgptStage.Stage, chatgptStage.StageFileName)
+	chatgptStage.StageFileName = fmt.Sprintf(
+		"%s-%d.md",
+		documentName,
+		time.Now().Unix(),
+	)
+	chatgptStage.S3Key = fmt.Sprintf(
+		"%s/%s",
+		chatgptStage.Stage,
+		chatgptStage.StageFileName,
+	)
 
 	//
 	_, err = cfg.s3Client.PutObject(ctx, &s3.PutObjectInput{
@@ -184,14 +242,28 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 		ContentLength: aws.Int64(int64(len(body))),
 	})
 	if err != nil {
-		slog.Error("Failed to save the document in the S3 bucket", "docName", prevStage.OriginalFileName, "key", chatgptStage.S3Key, "error", err)
+		slog.Error(
+			"Failed to save the document in the S3 bucket",
+			"docName",
+			prevStage.OriginalFileName,
+			"key",
+			chatgptStage.S3Key,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
 	// Update the stage to complete
 	err = cfg.store.CompleteDocumentStage(ctx, chatgptStage)
 	if err != nil {
-		slog.Error("Failed to update the processing stage as complete", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Failed to update the processing stage as complete",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 

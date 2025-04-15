@@ -86,7 +86,11 @@ func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 
 	mathpixSecrets, err := util.LoadMathpixSecrets(ctx, awsCfg)
 	if err != nil {
-		slog.Error("Failed to load the Mathpix secrets from Secret Manager", "error", err)
+		slog.Error(
+			"Failed to load the Mathpix secrets from Secret Manager",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
@@ -109,7 +113,9 @@ func initLambda(ctx context.Context) error {
 	return err
 }
 
-func (cfg *handlerConfig) doRequestAndReadAll(req *http.Request) ([]byte, error) {
+func (cfg *handlerConfig) doRequestAndReadAll(
+	req *http.Request,
+) ([]byte, error) {
 
 	// Send request
 	client := &http.Client{}
@@ -121,7 +127,11 @@ func (cfg *handlerConfig) doRequestAndReadAll(req *http.Request) ([]byte, error)
 	defer resp.Body.Close()
 
 	if resp.StatusCode > 299 {
-		return nil, fmt.Errorf("request failed with status_code=%d and status=%s", resp.StatusCode, resp.Status)
+		return nil, fmt.Errorf(
+			"request failed with status_code=%d and status=%s",
+			resp.StatusCode,
+			resp.Status,
+		)
 	}
 
 	// Parse response
@@ -133,7 +143,11 @@ func (cfg *handlerConfig) doRequestAndReadAll(req *http.Request) ([]byte, error)
 	return respBody, nil
 }
 
-func (cfg *handlerConfig) newRequest(method string, url string, body io.Reader) (*http.Request, error) {
+func (cfg *handlerConfig) newRequest(
+	method string,
+	url string,
+	body io.Reader,
+) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
@@ -153,13 +167,21 @@ func (cfg *handlerConfig) pollForResults(pdfID string) error {
 	for {
 		req, err := cfg.newRequest("GET", pollURL, nil)
 		if err != nil {
-			slog.Error("Failed to create GET request for mathpix document status", "error", err)
+			slog.Error(
+				"Failed to create GET request for mathpix document status",
+				"error",
+				err,
+			)
 			return err
 		}
 
 		bodyContents, err := cfg.doRequestAndReadAll(req)
 		if err != nil {
-			slog.Error("Failed to send GET request for mathpix documetn status", "error", err)
+			slog.Error(
+				"Failed to send GET request for mathpix documetn status",
+				"error",
+				err,
+			)
 			return err
 		}
 
@@ -167,7 +189,13 @@ func (cfg *handlerConfig) pollForResults(pdfID string) error {
 		var pollResp PollResponse
 		err = json.Unmarshal(bodyContents, &pollResp)
 		if err != nil {
-			slog.Error("Failed to unmarshal mathpix document status", "body", string(bodyContents), "error", err)
+			slog.Error(
+				"Failed to unmarshal mathpix document status",
+				"body",
+				string(bodyContents),
+				"error",
+				err,
+			)
 			return err
 		}
 
@@ -191,20 +219,31 @@ func (cfg *handlerConfig) queryConversionResults(pdfID string) ([]byte, error) {
 
 	req, err := cfg.newRequest("GET", resultsURL, nil)
 	if err != nil {
-		slog.Error("Failed to crate GET request for mathpix document status", "error", err)
+		slog.Error(
+			"Failed to crate GET request for mathpix document status",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
 	body, err := cfg.doRequestAndReadAll(req)
 	if err != nil {
-		slog.Error("Failed to send GET request for mathpix documetn status", "error", err)
+		slog.Error(
+			"Failed to send GET request for mathpix documetn status",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
 	return body, nil
 }
 
-func (cfg *handlerConfig) sendDocumentToMathpix(ctx context.Context, prevStage *types.DocumentProcessingStage) (string, error) {
+func (cfg *handlerConfig) sendDocumentToMathpix(
+	ctx context.Context,
+	prevStage *types.DocumentProcessingStage,
+) (string, error) {
 	// get the input file form S3
 	resp, err := cfg.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(types.S3_BUCKET_NAME),
@@ -237,7 +276,11 @@ func (cfg *handlerConfig) sendDocumentToMathpix(ctx context.Context, prevStage *
 	// Create HTTP request
 	req, err := cfg.newRequest("POST", MathpixPdfApiURL, body)
 	if err != nil {
-		slog.Error("Failed to create POST request for mathpix API", "error", err)
+		slog.Error(
+			"Failed to create POST request for mathpix API",
+			"error",
+			err,
+		)
 		return "", err
 	}
 
@@ -260,13 +303,21 @@ func (cfg *handlerConfig) sendDocumentToMathpix(ctx context.Context, prevStage *
 	}
 
 	if len(uploadResp.Error) != 0 {
-		return "", fmt.Errorf("mathpix error: %s, ErrorInfo.ID=%s, ErrorInfo.Message=%s", uploadResp.Error, uploadResp.ErrorInfo.ID, uploadResp.ErrorInfo.Message)
+		return "", fmt.Errorf(
+			"mathpix error: %s, ErrorInfo.ID=%s, ErrorInfo.Message=%s",
+			uploadResp.Error,
+			uploadResp.ErrorInfo.ID,
+			uploadResp.ErrorInfo.Message,
+		)
 	}
 
 	return uploadResp.PdfID, nil
 }
 
-func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
+func process(
+	ctx context.Context,
+	event types.DocumentStep,
+) (types.DocumentStep, error) {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
@@ -279,36 +330,77 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 
 	var err error
 	// query the previous stage information
-	prevStage, err := cfg.store.GetDocumentStage(ctx, event.DocumentID, event.Stage)
+	prevStage, err := cfg.store.GetDocumentStage(
+		ctx,
+		event.DocumentID,
+		event.Stage,
+	)
 	if err != nil {
-		slog.Error("Failed to get the previous stage information", "id", event.DocumentID, "stage", event.Stage, "error", err)
+		slog.Error(
+			"Failed to get the previous stage information",
+			"id",
+			event.DocumentID,
+			"stage",
+			event.Stage,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
 	// create the mathpix stage entry
-	mathpixStage, err := cfg.store.StartDocumentStage(ctx, event.DocumentID, types.DOCUMENT_STAGE_MATHPIX, prevStage.OriginalFileName)
+	mathpixStage, err := cfg.store.StartDocumentStage(
+		ctx,
+		event.DocumentID,
+		types.DOCUMENT_STAGE_MATHPIX,
+		prevStage.OriginalFileName,
+	)
 	if err != nil {
-		slog.Error("Failed to start the Mathpix document processing stage", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Failed to start the Mathpix document processing stage",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
 	// Upload PDF to Mathpix
 	pdfID, err := cfg.sendDocumentToMathpix(ctx, prevStage)
 	if err != nil {
-		slog.Error("Error uploading PDF", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Error uploading PDF",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
 	// Poll for results
 	err = cfg.pollForResults(pdfID)
 	if err != nil {
-		slog.Error("Error getting results", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Error getting results",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
 	body, err := cfg.queryConversionResults(pdfID)
 	if err != nil {
-		slog.Error("Failed to query conversion results", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Failed to query conversion results",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 
 	}
@@ -317,8 +409,16 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 	documentName := util.GetNamePart(prevStage.OriginalFileName)
 
 	// Save mathpix markdown to S3
-	mathpixStage.StageFileName = fmt.Sprintf("%s-%d.md", documentName, time.Now().Unix())
-	mathpixStage.S3Key = fmt.Sprintf("%s/%s", mathpixStage.Stage, mathpixStage.StageFileName)
+	mathpixStage.StageFileName = fmt.Sprintf(
+		"%s-%d.md",
+		documentName,
+		time.Now().Unix(),
+	)
+	mathpixStage.S3Key = fmt.Sprintf(
+		"%s/%s",
+		mathpixStage.Stage,
+		mathpixStage.StageFileName,
+	)
 	_, err = cfg.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
 		Key:           aws.String(mathpixStage.S3Key),
@@ -327,7 +427,15 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 		ContentLength: aws.Int64(int64(len(body))),
 	})
 	if err != nil {
-		slog.Error("Failed to save the document in the S3 bucket", "docName", prevStage.OriginalFileName, "key", mathpixStage.S3Key, "error", err)
+		slog.Error(
+			"Failed to save the document in the S3 bucket",
+			"docName",
+			prevStage.OriginalFileName,
+			"key",
+			mathpixStage.S3Key,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
@@ -335,7 +443,13 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 
 	err = cfg.store.CompleteDocumentStage(ctx, mathpixStage)
 	if err != nil {
-		slog.Error("Failed to update the processing stage as complete", "docName", prevStage.OriginalFileName, "error", err)
+		slog.Error(
+			"Failed to update the processing stage as complete",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 

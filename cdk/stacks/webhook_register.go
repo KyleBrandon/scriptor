@@ -12,14 +12,21 @@ import (
 func (cfg *CdkScriptorConfig) NewWebHookRegisterStack(id string) awscdk.Stack {
 	stack := awscdk.NewStack(cfg.App, &id, &cfg.Props.StackProps)
 
-	myFunction := awslambda.NewFunction(stack, jsii.String("scriptorWebhookRegisterLambda"), &awslambda.FunctionProps{
-		Runtime: awslambda.Runtime_PROVIDED_AL2023(),
-		Code:    awslambda.AssetCode_FromAsset(jsii.String("../bin/webhook_register.zip"), nil),
-		Handler: jsii.String("main"),
-		Environment: &map[string]*string{
-			"WEBHOOK_URL": jsii.String(cfg.WebhookURL),
+	myFunction := awslambda.NewFunction(
+		stack,
+		jsii.String("scriptorWebhookRegisterLambda"),
+		&awslambda.FunctionProps{
+			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
+			Code: awslambda.AssetCode_FromAsset(
+				jsii.String("../bin/webhook_register.zip"),
+				nil,
+			),
+			Handler: jsii.String("main"),
+			Environment: &map[string]*string{
+				"WEBHOOK_URL": jsii.String(cfg.WebhookURL),
+			},
 		},
-	})
+	)
 
 	// grant the lambda permission to read the Google Drive secret
 	cfg.GoogleServiceKeySecret.GrantRead(myFunction, nil)
@@ -34,11 +41,22 @@ func (cfg *CdkScriptorConfig) NewWebHookRegisterStack(id string) awscdk.Stack {
 	cfg.watchChannelLockTable.GrantReadWriteData(myFunction)
 
 	// setup an event to trigger the lambda every 4 hours
-	rule := awsevents.NewRule(stack, jsii.String("WebhookRegisterSchedule"), &awsevents.RuleProps{
-		Schedule: awsevents.Schedule_Rate(awscdk.Duration_Hours(aws.Float64(4))),
-	})
+	rule := awsevents.NewRule(
+		stack,
+		jsii.String("WebhookRegisterSchedule"),
+		&awsevents.RuleProps{
+			Schedule: awsevents.Schedule_Rate(
+				awscdk.Duration_Hours(aws.Float64(4)),
+			),
+		},
+	)
 
-	rule.AddTarget(awseventstargets.NewLambdaFunction(myFunction, &awseventstargets.LambdaFunctionProps{}))
+	rule.AddTarget(
+		awseventstargets.NewLambdaFunction(
+			myFunction,
+			&awseventstargets.LambdaFunctionProps{},
+		),
+	)
 
 	return stack
 }

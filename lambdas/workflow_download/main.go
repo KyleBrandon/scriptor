@@ -51,7 +51,11 @@ func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 	cfg.dc, err = google.NewGoogleDrive(ctx)
 	if err != nil {
 		//
-		slog.Error("Failed to initialize the Google Drive service context", "error", err)
+		slog.Error(
+			"Failed to initialize the Google Drive service context",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
@@ -74,7 +78,11 @@ func initLambda(ctx context.Context) error {
 }
 
 // TODO: doesn't feel right updating the stage in here
-func (cfg *handlerConfig) copyDocument(ctx context.Context, document *types.Document, stage *types.DocumentProcessingStage) error {
+func (cfg *handlerConfig) copyDocument(
+	ctx context.Context,
+	document *types.Document,
+	stage *types.DocumentProcessingStage,
+) error {
 	// get a reader from Google Drive for the document
 	reader, err := cfg.dc.GetReader(document)
 	if err != nil {
@@ -91,7 +99,11 @@ func (cfg *handlerConfig) copyDocument(ctx context.Context, document *types.Docu
 	stage.OriginalFileName = document.Name
 
 	// build the file name for the stage to have a timestamp
-	stage.StageFileName = fmt.Sprintf("%s-%d.pdf", documentName, time.Now().Unix())
+	stage.StageFileName = fmt.Sprintf(
+		"%s-%d.pdf",
+		documentName,
+		time.Now().Unix(),
+	)
 
 	// construct the S3 Key for the file stage
 	stage.S3Key = fmt.Sprintf("%s/%s", stage.Stage, stage.StageFileName)
@@ -105,14 +117,23 @@ func (cfg *handlerConfig) copyDocument(ctx context.Context, document *types.Docu
 		ContentLength: aws.Int64(document.Size),
 	})
 	if err != nil {
-		slog.Error("Failed to save the document in the S3 bucket", "docName", document.Name, "error", err)
+		slog.Error(
+			"Failed to save the document in the S3 bucket",
+			"docName",
+			document.Name,
+			"error",
+			err,
+		)
 		return err
 	}
 
 	return nil
 }
 
-func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep, error) {
+func process(
+	ctx context.Context,
+	event types.DocumentStep,
+) (types.DocumentStep, error) {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
@@ -128,14 +149,31 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 	// Query the document from Google Drive
 	document, err := cfg.store.GetDocument(ctx, event.DocumentID)
 	if err != nil {
-		slog.Error("Failed to query the document to download", "id", event.DocumentID, "error", err)
+		slog.Error(
+			"Failed to query the document to download",
+			"id",
+			event.DocumentID,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
 	// create the download stage entry
-	stage, err := cfg.store.StartDocumentStage(ctx, document.ID, types.DOCUMENT_STAGE_DOWNLOAD, document.Name)
+	stage, err := cfg.store.StartDocumentStage(
+		ctx,
+		document.ID,
+		types.DOCUMENT_STAGE_DOWNLOAD,
+		document.Name,
+	)
 	if err != nil {
-		slog.Error("Failed to start the Mathpix document processing stage", "docName", document.Name, "error", err)
+		slog.Error(
+			"Failed to start the Mathpix document processing stage",
+			"docName",
+			document.Name,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
@@ -147,7 +185,13 @@ func process(ctx context.Context, event types.DocumentStep) (types.DocumentStep,
 
 	err = cfg.store.CompleteDocumentStage(ctx, stage)
 	if err != nil {
-		slog.Error("Failed to update the processing stage as complete", "docName", document.Name, "error", err)
+		slog.Error(
+			"Failed to update the processing stage as complete",
+			"docName",
+			document.Name,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 

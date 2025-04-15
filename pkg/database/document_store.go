@@ -17,7 +17,11 @@ import (
 func NewDocumentStore(ctx context.Context) (DocumentStore, error) {
 	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		slog.Error("Failed to configure the DocumentStoreContext ", "error", err)
+		slog.Error(
+			"Failed to configure the DocumentStoreContext ",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
@@ -28,7 +32,10 @@ func NewDocumentStore(ctx context.Context) (DocumentStore, error) {
 	}, nil
 }
 
-func (db *DocumentStoreContext) GetDocument(ctx context.Context, id string) (*stypes.Document, error) {
+func (db *DocumentStoreContext) GetDocument(
+	ctx context.Context,
+	id string,
+) (*stypes.Document, error) {
 
 	ret := &stypes.Document{}
 
@@ -54,7 +61,10 @@ func (db *DocumentStoreContext) GetDocument(ctx context.Context, id string) (*st
 	return ret, nil
 }
 
-func (db *DocumentStoreContext) GetDocumentByGoogleID(ctx context.Context, googleFileID string) (*stypes.Document, error) {
+func (db *DocumentStoreContext) GetDocumentByGoogleID(
+	ctx context.Context,
+	googleFileID string,
+) (*stypes.Document, error) {
 
 	queryInput := &dynamodb.QueryInput{
 		TableName:              aws.String(WATCH_CHANNEL_TABLE),
@@ -74,7 +84,11 @@ func (db *DocumentStoreContext) GetDocumentByGoogleID(ctx context.Context, googl
 		return nil, ErrDocumentNotFound
 	}
 
-	util.Assert(len(result.Items), 1, "We should only have 1 file returned when querying by the Google file ID")
+	util.Assert(
+		len(result.Items),
+		1,
+		"We should only have 1 file returned when querying by the Google file ID",
+	)
 
 	var documents []stypes.Document
 
@@ -86,7 +100,10 @@ func (db *DocumentStoreContext) GetDocumentByGoogleID(ctx context.Context, googl
 	return &documents[0], nil
 }
 
-func (db *DocumentStoreContext) InsertDocument(ctx context.Context, document *stypes.Document) error {
+func (db *DocumentStoreContext) InsertDocument(
+	ctx context.Context,
+	document *stypes.Document,
+) error {
 
 	av, err := attributevalue.MarshalMap(document)
 	if err != nil {
@@ -109,7 +126,11 @@ func (db *DocumentStoreContext) InsertDocument(ctx context.Context, document *st
 
 }
 
-func (db *DocumentStoreContext) GetDocumentStage(ctx context.Context, id string, stage string) (*stypes.DocumentProcessingStage, error) {
+func (db *DocumentStoreContext) GetDocumentStage(
+	ctx context.Context,
+	id string,
+	stage string,
+) (*stypes.DocumentProcessingStage, error) {
 	ret := &stypes.DocumentProcessingStage{}
 
 	key := map[string]types.AttributeValue{
@@ -124,21 +145,36 @@ func (db *DocumentStoreContext) GetDocumentStage(ctx context.Context, id string,
 
 	result, err := db.store.GetItem(ctx, item)
 	if err != nil {
-		slog.Error("Failed to find the document processing stage", "id", id, "stage", stage, "error", err)
+		slog.Error(
+			"Failed to find the document processing stage",
+			"id",
+			id,
+			"stage",
+			stage,
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
 	// Convert DynamoDB result into a slice of WatchChannels
 	err = attributevalue.UnmarshalMap(result.Item, ret)
 	if err != nil {
-		slog.Error("Failed to unmarshal the document processing stage", "error", err)
+		slog.Error(
+			"Failed to unmarshal the document processing stage",
+			"error",
+			err,
+		)
 		return ret, err
 	}
 
 	return ret, nil
 }
 
-func (db *DocumentStoreContext) insertDocumentStage(ctx context.Context, stage *stypes.DocumentProcessingStage) error {
+func (db *DocumentStoreContext) insertDocumentStage(
+	ctx context.Context,
+	stage *stypes.DocumentProcessingStage,
+) error {
 
 	stage.StartedAt = time.Now().UTC()
 
@@ -163,7 +199,12 @@ func (db *DocumentStoreContext) insertDocumentStage(ctx context.Context, stage *
 
 }
 
-func (db *DocumentStoreContext) StartDocumentStage(ctx context.Context, id string, stage string, originalFileName string) (*stypes.DocumentProcessingStage, error) {
+func (db *DocumentStoreContext) StartDocumentStage(
+	ctx context.Context,
+	id string,
+	stage string,
+	originalFileName string,
+) (*stypes.DocumentProcessingStage, error) {
 	// Update the 'download' processing stage to in-progress
 	docStage := &stypes.DocumentProcessingStage{
 		ID:               id,
@@ -182,7 +223,10 @@ func (db *DocumentStoreContext) StartDocumentStage(ctx context.Context, id strin
 	return docStage, nil
 }
 
-func (db *DocumentStoreContext) CompleteDocumentStage(ctx context.Context, stage *stypes.DocumentProcessingStage) error {
+func (db *DocumentStoreContext) CompleteDocumentStage(
+	ctx context.Context,
+	stage *stypes.DocumentProcessingStage,
+) error {
 
 	stage.CompletedAt = time.Now().UTC()
 	stage.StageStatus = stypes.DOCUMENT_STATUS_COMPLETE
@@ -198,7 +242,10 @@ func (db *DocumentStoreContext) CompleteDocumentStage(ctx context.Context, stage
 		return err
 	}
 
-	updateExpression, expressionAttributeValues := buildUpdateExpression(av, []string{"id", "stage"})
+	updateExpression, expressionAttributeValues := buildUpdateExpression(
+		av,
+		[]string{"id", "stage"},
+	)
 
 	input := &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(DOCUMENT_PROCESSING_STAGE_TABLE),
@@ -210,7 +257,11 @@ func (db *DocumentStoreContext) CompleteDocumentStage(ctx context.Context, stage
 
 	_, err = db.store.UpdateItem(ctx, input)
 	if err != nil {
-		slog.Error("Failed to update the document processing stage", "error", err)
+		slog.Error(
+			"Failed to update the document processing stage",
+			"error",
+			err,
+		)
 		return err
 	}
 

@@ -20,7 +20,10 @@ func Assert[V comparable](got, expected V, message string) {
 	}
 }
 
-func BuildGatewayResponse(message string, statusCode int) (events.APIGatewayProxyResponse, error) {
+func BuildGatewayResponse(
+	message string,
+	statusCode int,
+) (events.APIGatewayProxyResponse, error) {
 	return events.APIGatewayProxyResponse{
 		Body:       message,
 		StatusCode: statusCode,
@@ -37,7 +40,11 @@ func BuildStepInput(notificationID, documentID, stage string) (string, error) {
 
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
-		slog.Error("Failed to serialize the document information for the next step", "error", err)
+		slog.Error(
+			"Failed to serialize the document information for the next step",
+			"error",
+			err,
+		)
 		return "", err
 	}
 
@@ -52,7 +59,11 @@ func GetNamePart(fullName string) string {
 	return nameWithoutExt
 }
 
-func getSecret(ctx context.Context, sm *secretsmanager.Client, secretName string) (string, error) {
+func getSecret(
+	ctx context.Context,
+	sm *secretsmanager.Client,
+	secretName string,
+) (string, error) {
 
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
@@ -65,14 +76,25 @@ func getSecret(ctx context.Context, sm *secretsmanager.Client, secretName string
 }
 
 // TODO: Make this into a generic
-func GetDefaultFolderLocations(ctx context.Context, awsCfg aws.Config) (*types.GoogleFolderDefaultLocations, error) {
+func GetDefaultFolderLocations(
+	ctx context.Context,
+	awsCfg aws.Config,
+) (*types.GoogleFolderDefaultLocations, error) {
 
 	sm := secretsmanager.NewFromConfig(awsCfg)
 
 	// no watch channels yet, let's seed a default
-	folderInfo, err := getSecret(ctx, sm, types.GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS)
+	folderInfo, err := getSecret(
+		ctx,
+		sm,
+		types.GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS,
+	)
 	if err != nil {
-		slog.Error("Failed to get the default folder locations from AWS secret manager", "error", err)
+		slog.Error(
+			"Failed to get the default folder locations from AWS secret manager",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
@@ -80,14 +102,21 @@ func GetDefaultFolderLocations(ctx context.Context, awsCfg aws.Config) (*types.G
 
 	err = json.Unmarshal([]byte(folderInfo), &folderLocations)
 	if err != nil {
-		slog.Error("Failed to unmarshal default Google folder locations from secret manager", "error", err)
+		slog.Error(
+			"Failed to unmarshal default Google folder locations from secret manager",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
 	return &folderLocations, nil
 }
 
-func CreateChatGPTClient(ctx context.Context, awsCfg aws.Config) (*openai.Client, error) {
+func CreateChatGPTClient(
+	ctx context.Context,
+	awsCfg aws.Config,
+) (*openai.Client, error) {
 
 	svc := secretsmanager.NewFromConfig(awsCfg)
 
@@ -110,7 +139,10 @@ func CreateChatGPTClient(ctx context.Context, awsCfg aws.Config) (*openai.Client
 	return client, nil
 }
 
-func LoadMathpixSecrets(ctx context.Context, awsCfg aws.Config) (*types.MathpixSecrets, error) {
+func LoadMathpixSecrets(
+	ctx context.Context,
+	awsCfg aws.Config,
+) (*types.MathpixSecrets, error) {
 
 	// New secrets manager from AWS
 	svc := secretsmanager.NewFromConfig(awsCfg)

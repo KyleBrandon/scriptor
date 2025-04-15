@@ -108,7 +108,9 @@ func (gd *GoogleDriveContext) GetChangesStartToken() (string, error) {
 	return resp.StartPageToken, nil
 }
 
-func (gd *GoogleDriveContext) QueryChanges(folderID, startToken string) (*types.DocumentChanges, error) {
+func (gd *GoogleDriveContext) QueryChanges(
+	folderID, startToken string,
+) (*types.DocumentChanges, error) {
 	slog.Debug(">>QueryChanges")
 	defer slog.Debug("<<QueryChanges")
 
@@ -125,22 +127,39 @@ func (gd *GoogleDriveContext) QueryChanges(folderID, startToken string) (*types.
 			Fields("nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, parents, createdTime, modifiedTime, size))").
 			Do()
 		if err != nil {
-			slog.Error("Failed to query the drive changes using a start token", "folderID", folderID, "startToken", startToken, "error", err)
+			slog.Error(
+				"Failed to query the drive changes using a start token",
+				"folderID",
+				folderID,
+				"startToken",
+				startToken,
+				"error",
+				err,
+			)
 			return nil, err
 		}
 
 		// build a Document from each file that's changed
 		for _, change := range changes.Changes {
-			util.Assert(change.FileId, change.File.Id, "expect these to be the same")
+			util.Assert(
+				change.FileId,
+				change.File.Id,
+				"expect these to be the same",
+			)
 
 			// ignore drive changes
-			if change.ChangeType == "drive" || change.Removed || change.File.Trashed {
+			if change.ChangeType == "drive" || change.Removed ||
+				change.File.Trashed {
 				continue
 			}
 
 			// is the file in the folder we're monitoring?
 			if !slices.Contains(change.File.Parents, folderID) {
-				slog.Warn("Document not in the folder we're monitoring", "id", change.File.Id)
+				slog.Warn(
+					"Document not in the folder we're monitoring",
+					"id",
+					change.File.Id,
+				)
 				continue
 			}
 
@@ -154,7 +173,13 @@ func (gd *GoogleDriveContext) QueryChanges(folderID, startToken string) (*types.
 
 			document, err := buildDocument(change.File)
 			if err != nil {
-				slog.Error("Failed to build the document from the Google Drive File", "docName", change.File.Name, "error", err)
+				slog.Error(
+					"Failed to build the document from the Google Drive File",
+					"docName",
+					change.File.Name,
+					"error",
+					err,
+				)
 				continue
 			}
 
@@ -181,7 +206,9 @@ func (gd *GoogleDriveContext) GetDocument(id string) (*types.Document, error) {
 	slog.Debug(">>GetDocument")
 	defer slog.Debug("<<GetDocument")
 
-	file, err := gd.driveService.Files.Get(id).Fields("id, name, parents, createdTime, modifiedTime, size").Do()
+	file, err := gd.driveService.Files.Get(id).
+		Fields("id, name, parents, createdTime, modifiedTime, size").
+		Do()
 	if err != nil {
 		slog.Error("Failed to get document by ID", "id", id, "error", err)
 		return nil, err
@@ -200,13 +227,33 @@ func buildDocument(file *drive.File) (*types.Document, error) {
 
 	createdTime, err := time.Parse(time.RFC3339, file.CreatedTime)
 	if err != nil {
-		slog.Warn("Failed to parse the created time for the file", "fileID", file.Id, "fileName", file.Name, "createdTime", file.CreatedTime, "error", err)
+		slog.Warn(
+			"Failed to parse the created time for the file",
+			"fileID",
+			file.Id,
+			"fileName",
+			file.Name,
+			"createdTime",
+			file.CreatedTime,
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
 	modifiedTime, err := time.Parse(time.RFC3339, file.ModifiedTime)
 	if err != nil {
-		slog.Warn("Failed to parse the modified time for the file", "fileID", file.Id, "fileName", file.Name, "modifiedTime", file.ModifiedTime, "error", err)
+		slog.Warn(
+			"Failed to parse the modified time for the file",
+			"fileID",
+			file.Id,
+			"fileName",
+			file.Name,
+			"modifiedTime",
+			file.ModifiedTime,
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
@@ -245,11 +292,19 @@ func (gd *GoogleDriveContext) Archive(id string, archiveFolderID string) error {
 }
 
 // Get a io.Reader for the document
-func (gd *GoogleDriveContext) GetReader(document *types.Document) (io.ReadCloser, error) {
+func (gd *GoogleDriveContext) GetReader(
+	document *types.Document,
+) (io.ReadCloser, error) {
 	// Get the file data
 	resp, err := gd.driveService.Files.Get(document.GoogleID).Download()
 	if err != nil {
-		slog.Error("Unable to get the file reader", "GoogleID", document.GoogleID, "error", err)
+		slog.Error(
+			"Unable to get the file reader",
+			"GoogleID",
+			document.GoogleID,
+			"error",
+			err,
+		)
 		return nil, err
 
 	}
@@ -258,7 +313,10 @@ func (gd *GoogleDriveContext) GetReader(document *types.Document) (io.ReadCloser
 }
 
 // Save a file to a Google Drive folder location
-func (gd *GoogleDriveContext) SaveFile(fileName, folderID string, reader io.Reader) error {
+func (gd *GoogleDriveContext) SaveFile(
+	fileName, folderID string,
+	reader io.Reader,
+) error {
 	// Define file metadata (including folder destination)
 	fileMetadata := &drive.File{
 		Name:    fileName,
@@ -277,7 +335,10 @@ func (gd *GoogleDriveContext) SaveFile(fileName, folderID string, reader io.Read
 	return nil
 }
 
-func (gd *GoogleDriveContext) CreateWatchChannel(wc *types.WatchChannel, url string) error {
+func (gd *GoogleDriveContext) CreateWatchChannel(
+	wc *types.WatchChannel,
+	url string,
+) error {
 	slog.Debug(">>createWatchChannel")
 	defer slog.Debug("<<createWatchChannel")
 
@@ -296,7 +357,13 @@ func (gd *GoogleDriveContext) CreateWatchChannel(wc *types.WatchChannel, url str
 	// Watch for changes in the folder
 	channel, err := gd.driveService.Files.Watch(wc.FolderID, req).Do()
 	if err != nil {
-		slog.Error("Failed to watch folder", "folderID", wc.FolderID, "error", err)
+		slog.Error(
+			"Failed to watch folder",
+			"folderID",
+			wc.FolderID,
+			"error",
+			err,
+		)
 		return err
 	}
 

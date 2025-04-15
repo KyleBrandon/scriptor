@@ -53,7 +53,11 @@ func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 	cfg.dc, err = google.NewGoogleDrive(ctx)
 	if err != nil {
 		//
-		slog.Error("Failed to initialize the Google Drive service context", "error", err)
+		slog.Error(
+			"Failed to initialize the Google Drive service context",
+			"error",
+			err,
+		)
 		return nil, err
 	}
 
@@ -105,9 +109,16 @@ func process(ctx context.Context, sqsEvent events.SQSEvent) error {
 		}
 
 		// Acquire the changes lock on the channel
-		startToken, err := cfg.store.AcquireChangesToken(ctx, eventData.ChannelID)
+		startToken, err := cfg.store.AcquireChangesToken(
+			ctx,
+			eventData.ChannelID,
+		)
 		if err != nil {
-			slog.Error("Failed to acquire the watch channel changes lock", "error", err)
+			slog.Error(
+				"Failed to acquire the watch channel changes lock",
+				"error",
+				err,
+			)
 			return err
 		}
 
@@ -119,9 +130,17 @@ func process(ctx context.Context, sqsEvent events.SQSEvent) error {
 		}
 
 		// Update the start token so we pick up any new changes next time
-		err = cfg.store.ReleaseChangesToken(ctx, eventData.ChannelID, changes.NextStartToken)
+		err = cfg.store.ReleaseChangesToken(
+			ctx,
+			eventData.ChannelID,
+			changes.NextStartToken,
+		)
 		if err != nil {
-			slog.Error("Failed to release the watch channel changes lock", "error", err)
+			slog.Error(
+				"Failed to release the watch channel changes lock",
+				"error",
+				err,
+			)
 		}
 
 		// Check if there are documents to process
@@ -129,31 +148,69 @@ func process(ctx context.Context, sqsEvent events.SQSEvent) error {
 			return nil
 		}
 
-		slog.Info("Found documents to process", "count", len(changes.Documents), "folderID", eventData.FolderID, "documents", changes.Documents)
+		slog.Info(
+			"Found documents to process",
+			"count",
+			len(changes.Documents),
+			"folderID",
+			eventData.FolderID,
+			"documents",
+			changes.Documents,
+		)
 
 		// Start the state machine for each document discovered
 		for _, document := range changes.Documents {
-			slog.Info("Processing document from queue", "name", document.Name, "notificationID", eventData.NotificationID)
+			slog.Info(
+				"Processing document from queue",
+				"name",
+				document.Name,
+				"notificationID",
+				eventData.NotificationID,
+			)
 
 			// Check if we have already processed this document
 			_, err = cfg.docStore.GetDocumentByGoogleID(ctx, document.GoogleID)
 			if err == nil {
 				// The document exists, ignore it
-				slog.Warn("Document already processed", "id", document.ID, "googleID", document.GoogleID, "name", document.Name)
+				slog.Warn(
+					"Document already processed",
+					"id",
+					document.ID,
+					"googleID",
+					document.GoogleID,
+					"name",
+					document.Name,
+				)
 				continue
 			}
 
 			// Save the Google Drive document information
 			err = cfg.docStore.InsertDocument(ctx, document)
 			if err != nil {
-				slog.Error("Failed to save the document metadata", "docName", document.Name, "error", err)
+				slog.Error(
+					"Failed to save the document metadata",
+					"docName",
+					document.Name,
+					"error",
+					err,
+				)
 				return err
 			}
 
 			// TODO: this should be a different step type as it's the Google document ID not ours
-			input, err := util.BuildStepInput(eventData.NotificationID, document.ID, types.DOCUMENT_STAGE_NEW)
+			input, err := util.BuildStepInput(
+				eventData.NotificationID,
+				document.ID,
+				types.DOCUMENT_STAGE_NEW,
+			)
 			if err != nil {
-				slog.Error("Failed to build the stage input for the next stage", "docName", document.Name, "error", err)
+				slog.Error(
+					"Failed to build the stage input for the next stage",
+					"docName",
+					document.Name,
+					"error",
+					err,
+				)
 				return err
 			}
 
@@ -163,7 +220,13 @@ func process(ctx context.Context, sqsEvent events.SQSEvent) error {
 				Input:           aws.String(input),
 			})
 			if err != nil {
-				slog.Error("Failed to start the stage machine for the document", "docName", document.Name, "error", err)
+				slog.Error(
+					"Failed to start the stage machine for the document",
+					"docName",
+					document.Name,
+					"error",
+					err,
+				)
 				return err
 			}
 		}

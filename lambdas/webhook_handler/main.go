@@ -42,7 +42,9 @@ func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 	cfg.queueURL = os.Getenv("SQS_QUEUE_URL")
 	if cfg.queueURL == "" {
 		slog.Error("SQS URL is not configured")
-		return nil, fmt.Errorf("failed to load the SQS URL fron the environment")
+		return nil, fmt.Errorf(
+			"failed to load the SQS URL fron the environment",
+		)
 	}
 
 	cfg.store, err = database.NewWatchChannelStore(ctx)
@@ -77,7 +79,10 @@ func initLambda(ctx context.Context) error {
 	return err
 }
 
-func queryWatchChannelForRequest(ctx context.Context, request events.APIGatewayProxyRequest) (*types.WatchChannel, error) {
+func queryWatchChannelForRequest(
+	ctx context.Context,
+	request events.APIGatewayProxyRequest,
+) (*types.WatchChannel, error) {
 	resourceState := request.Headers["X-Goog-Resource-State"]
 	channelID := request.Headers["X-Goog-Channel-ID"]
 	resourceID := request.Headers["X-Goog-Resource-ID"]
@@ -85,40 +90,69 @@ func queryWatchChannelForRequest(ctx context.Context, request events.APIGatewayP
 	// If we receive a 'sync' notification, ignore it for now.
 	// We could use this for initialzing the state of the vault?
 	if resourceState != "add" {
-		slog.Debug("Webhook received non-add resource state", "channelID", channelID, "resourceState", resourceState)
+		slog.Debug(
+			"Webhook received non-add resource state",
+			"channelID",
+			channelID,
+			"resourceState",
+			resourceState,
+		)
 		return nil, fmt.Errorf("invalid file notification")
 	}
 
 	// query the watch channel based on the channelID
 	wc, err := cfg.store.GetWatchChannelByID(ctx, channelID)
 	if err != nil {
-		slog.Error("Failed to find a registration for the channel", "channelID", channelID, "error", err)
+		slog.Error(
+			"Failed to find a registration for the channel",
+			"channelID",
+			channelID,
+			"error",
+			err,
+		)
 		return nil, fmt.Errorf("invalid file notification")
 
 	}
 
 	// verify the resourceID
 	if resourceID != wc.ResourceID {
-		slog.Error("ResourceID for the channel is not valid", "channelID", channelID, "resourceID", resourceID, "error", err)
+		slog.Error(
+			"ResourceID for the channel is not valid",
+			"channelID",
+			channelID,
+			"resourceID",
+			resourceID,
+			"error",
+			err,
+		)
 		return nil, fmt.Errorf("invalid file notification")
 	}
 
 	return wc, nil
 }
 
-func process(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func process(
+	ctx context.Context,
+	request events.APIGatewayProxyRequest,
+) (events.APIGatewayProxyResponse, error) {
 	slog.Debug(">>processFileNotification")
 	defer slog.Debug("<<processFileNotification")
 
 	if err := initLambda(ctx); err != nil {
 		slog.Error("Failed to initialize the lambda", "error", err)
-		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
+		return util.BuildGatewayResponse(
+			err.Error(),
+			http.StatusInternalServerError,
+		)
 	}
 
 	// Parse the folderID from the gateway request
 	wc, err := queryWatchChannelForRequest(ctx, request)
 	if err != nil {
-		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
+		return util.BuildGatewayResponse(
+			err.Error(),
+			http.StatusInternalServerError,
+		)
 	}
 
 	message := types.ChannelNotification{
@@ -129,17 +163,29 @@ func process(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	messageBody, err := json.Marshal(&message)
 	if err != nil {
-		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
+		return util.BuildGatewayResponse(
+			err.Error(),
+			http.StatusInternalServerError,
+		)
 	}
 
-	slog.Info("Sending SQS message", "channeID", wc.ChannelID, "folderID", wc.FolderID)
+	slog.Info(
+		"Sending SQS message",
+		"channeID",
+		wc.ChannelID,
+		"folderID",
+		wc.FolderID,
+	)
 
 	_, err = cfg.sqsClient.SendMessage(ctx, &sqs.SendMessageInput{
 		QueueUrl:    &cfg.queueURL,
 		MessageBody: aws.String(string(messageBody)),
 	})
 	if err != nil {
-		return util.BuildGatewayResponse(err.Error(), http.StatusInternalServerError)
+		return util.BuildGatewayResponse(
+			err.Error(),
+			http.StatusInternalServerError,
+		)
 	}
 
 	return util.BuildGatewayResponse("Processing new file", http.StatusOK)
