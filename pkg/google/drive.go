@@ -337,7 +337,7 @@ func (gd *GoogleDriveContext) CreateWatchChannel(
 
 	// Set the watch channel to expire in 2 days
 	wc.ChannelID = uuid.New().String()
-	wc.ExpiresAt = time.Now().Add(48 * time.Hour).UnixMilli()
+	wc.ExpiresAt = time.Now().UTC().Add(48 * time.Hour).UnixMilli()
 	wc.WebhookUrl = url
 
 	req := &drive.Channel{

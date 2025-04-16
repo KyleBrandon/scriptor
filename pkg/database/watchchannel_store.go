@@ -176,7 +176,7 @@ func (db *WatchChannelStoreContext) AcquireChangesToken(
 	ctx context.Context,
 	channelID string,
 ) (string, error) {
-	updatedAt := time.Now()
+	updatedAt := time.Now().UTC()
 	now := updatedAt.UnixMilli()
 	leaseUntil := now + (30 * time.Second).Milliseconds()
 

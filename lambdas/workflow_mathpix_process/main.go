@@ -412,7 +412,7 @@ func process(
 	mathpixStage.StageFileName = fmt.Sprintf(
 		"%s-%d.md",
 		documentName,
-		time.Now().Unix(),
+		time.Now().UTC().Unix(),
 	)
 	mathpixStage.S3Key = fmt.Sprintf(
 		"%s/%s",

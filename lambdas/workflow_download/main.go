@@ -102,7 +102,7 @@ func (cfg *handlerConfig) copyDocument(
 	stage.StageFileName = fmt.Sprintf(
 		"%s-%d.pdf",
 		documentName,
-		time.Now().Unix(),
+		time.Now().UTC().Unix(),
 	)
 
 	// construct the S3 Key for the file stage

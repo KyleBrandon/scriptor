@@ -113,14 +113,13 @@ func (cfg *handlerConfig) getChannelsToRegister(
 	// We want to check if a watch channel is set to expire now or in the next 4 hours
 	// The reason being is that the we only check every 4 hours and the channels are set
 	// to expire in 48 hours.  We don't want to miss a channel expiring
-	channelRegisterTime := time.Now().Add(4 * time.Hour).UnixMilli()
+	channelRegisterTime := time.Now().UTC().Add(4 * time.Hour).UnixMilli()
 	for _, wc := range watchChannels {
-		expiresTime := time.Unix(wc.ExpiresAt, 0).Format(time.RFC3339)
 		slog.Info("check watch channel for renewal",
 			"channel", wc.ChannelID,
-			"currentTime", time.Now().Format(time.RFC3339),
+			"currentTime", time.Now().UTC().Format(time.RFC3339),
+			"channelExpires", wc.ExpiresAt,
 			"registerBy", channelRegisterTime,
-			"channelExpires", expiresTime,
 			"currentURL", cfg.webhookURL,
 			"channelURL", wc.WebhookUrl)
 		if wc.ExpiresAt <= channelRegisterTime ||
