@@ -285,9 +285,7 @@ func (gd *GoogleDriveContext) Archive(id string, archiveFolderID string) error {
 }
 
 // Get a io.Reader for the document
-func (gd *GoogleDriveContext) GetReader(
-	document *types.Document,
-) (io.ReadCloser, error) {
+func (gd *GoogleDriveContext) GetReader(document *types.Document) (io.ReadCloser, error) {
 	// Get the file data
 	resp, err := gd.driveService.Files.Get(document.GoogleID).Download()
 	if err != nil {
@@ -306,10 +304,7 @@ func (gd *GoogleDriveContext) GetReader(
 }
 
 // Save a file to a Google Drive folder location
-func (gd *GoogleDriveContext) SaveFile(
-	fileName, folderID string,
-	reader io.Reader,
-) error {
+func (gd *GoogleDriveContext) SaveFile(fileName, folderID string, reader io.Reader) error {
 	// Define file metadata (including folder destination)
 	fileMetadata := &drive.File{
 		Name:    fileName,
@@ -328,10 +323,7 @@ func (gd *GoogleDriveContext) SaveFile(
 	return nil
 }
 
-func (gd *GoogleDriveContext) CreateWatchChannel(
-	wc *types.WatchChannel,
-	url string,
-) error {
+func (gd *GoogleDriveContext) CreateWatchChannel(wc *types.WatchChannel, url string) error {
 	slog.Debug(">>createWatchChannel")
 	defer slog.Debug("<<createWatchChannel")
 
@@ -362,6 +354,24 @@ func (gd *GoogleDriveContext) CreateWatchChannel(
 
 	// save the resource identifier from AWS for the channel
 	wc.ResourceID = channel.ResourceId
+
+	return nil
+}
+
+func (gd *GoogleDriveContext) StopWatchChannel(wc *types.WatchChannel) error {
+	slog.Debug(">>stopWatchChannel")
+	defer slog.Debug("<<stopWatchChannel")
+
+	req := &drive.Channel{
+		Id:         wc.ChannelID,
+		ResourceId: wc.ResourceID,
+	}
+
+	err := gd.driveService.Channels.Stop(req).Context(gd.ctx).Do()
+	if err != nil {
+		slog.Warn("Failed to stop the channel", "channelID", wc.ChannelID, "resourceID", wc.ResourceID, "error", err)
+		return err
+	}
 
 	return nil
 }

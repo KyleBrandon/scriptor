@@ -40,13 +40,13 @@ func (cfg *CdkScriptorConfig) NewWebHookRegisterStack(id string) awscdk.Stack {
 	// grant the lambda permissions to read/write the watch channel lock table
 	cfg.watchChannelLockTable.GrantReadWriteData(myFunction)
 
-	// setup an event to trigger the lambda every 4 hours
+	// setup an event to trigger the lambda to renew the watch channel(s) every 20 hours
 	rule := awsevents.NewRule(
 		stack,
 		jsii.String("WebhookRegisterSchedule"),
 		&awsevents.RuleProps{
 			Schedule: awsevents.Schedule_Rate(
-				awscdk.Duration_Hours(aws.Float64(4)),
+				awscdk.Duration_Hours(aws.Float64(20)),
 			),
 		},
 	)

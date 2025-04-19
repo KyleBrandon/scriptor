@@ -136,7 +136,35 @@ func (db *WatchChannelStoreContext) GetWatchChannelByID(
 	return &wcs[0], nil
 }
 
-func (db *WatchChannelStoreContext) CreateChangesToken(
+func (db *WatchChannelStoreContext) GetWatchChannelLock(
+	ctx context.Context,
+	channelID string,
+) (*stypes.WatchChannelLock, error) {
+
+	queryInput := &dynamodb.GetItemInput{
+		TableName: aws.String(WATCH_CHANNEL_LOCK_TABLE),
+		Key: map[string]types.AttributeValue{
+			"channel_id": &types.AttributeValueMemberS{Value: channelID},
+		},
+	}
+
+	result, err := db.store.GetItem(ctx, queryInput)
+	if err != nil {
+		slog.Error("Failed to query the watch channel lock", "error", err)
+		return nil, err
+	}
+
+	wc := &stypes.WatchChannelLock{}
+
+	err = attributevalue.UnmarshalMap(result.Item, wc)
+	if err != nil {
+		return nil, err
+	}
+
+	return wc, nil
+}
+
+func (db *WatchChannelStoreContext) CreateWatchChannelLock(
 	ctx context.Context,
 	channelID, startToken string,
 ) error {
@@ -166,6 +194,45 @@ func (db *WatchChannelStoreContext) CreateChangesToken(
 			"error",
 			err,
 		)
+		return err
+	}
+
+	return nil
+}
+
+func (db *WatchChannelStoreContext) ClearWatchChannelLock(
+	ctx context.Context,
+	channelID, newStartToken string,
+) error {
+
+	updateItemInput := &dynamodb.UpdateItemInput{
+		TableName: aws.String(WATCH_CHANNEL_LOCK_TABLE),
+		Key: map[string]types.AttributeValue{
+			"channel_id": &types.AttributeValueMemberS{Value: channelID},
+		},
+		UpdateExpression: aws.String(
+			"SET locked = :false, LockExpires = :expires",
+		),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":false":   &types.AttributeValueMemberBOOL{Value: false},
+			":expires": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", 0)},
+		},
+	}
+
+	// if we have a new start token then update it as well
+	if newStartToken != "" {
+		updateItemInput.ExpressionAttributeValues[":new_start_token"] =
+			&types.AttributeValueMemberS{Value: newStartToken}
+	}
+
+	_, err := db.store.UpdateItem(ctx, updateItemInput)
+
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("lock is currently held")
+		}
+
 		return err
 	}
 

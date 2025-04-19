@@ -84,14 +84,15 @@ type (
 	// resource that monitors the folder identified in FolderID.
 	WatchChannel struct {
 		FolderID            string    `dynamodbav:"folder_id"`
-		ExpiresAt           int64     `dynamodbav:"expires_at"`
-		ChannelID           string    `dynamodbav:"channel_id"`
-		ResourceID          string    `dynamodbav:"resource_id"`
-		CreatedAt           time.Time `dynamodbav:"created_at"`
-		UpdatedAt           time.Time `dynamodbav:"updated_at"`
 		ArchiveFolderID     string    `dynamodbav:"archive_folder_id"`
 		DestinationFolderID string    `dynamodbav:"destination_folder_id"`
-		WebhookUrl          string    `dynamodbav:"webhook_url"`
+		CreatedAt           time.Time `dynamodbav:"created_at"`
+		ChannelID           string    `dynamodbav:"channel_id"`
+		ResourceID          string    `dynamodbav:"resource_id"`
+		UpdatedAt           time.Time `dynamodbav:"updated_at"`
+
+		ExpiresAt  int64  `dynamodbav:"expires_at"`
+		WebhookUrl string `dynamodbav:"webhook_url"`
 	}
 
 	// WatchChannelLock is used to lock a watch channel for querying changes

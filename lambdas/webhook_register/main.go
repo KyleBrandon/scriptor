@@ -104,33 +104,71 @@ func (cfg *handlerConfig) initializeDefaultWatchChannels() ([]*types.WatchChanne
 	return wcs, nil
 }
 
-func (cfg *handlerConfig) getChannelsToRegister(
-	watchChannels []*types.WatchChannel,
-) ([]*types.WatchChannel, error) {
-
-	register := make([]*types.WatchChannel, 0)
-
-	// We want to check if a watch channel is set to expire now or in the next 4 hours
-	// The reason being is that the we only check every 4 hours and the channels are set
-	// to expire in 48 hours.  We don't want to miss a channel expiring
-	channelRegisterTime := time.Now().UTC().Add(4 * time.Hour).UnixMilli()
-	for _, wc := range watchChannels {
-		slog.Info("check watch channel for renewal",
-			"channel", wc.ChannelID,
-			"currentTime", time.Now().UTC().Format(time.RFC3339),
-			"channelExpires", wc.ExpiresAt,
-			"registerBy", channelRegisterTime,
-			"currentURL", cfg.webhookURL,
-			"channelURL", wc.WebhookUrl)
-		if wc.ExpiresAt <= channelRegisterTime ||
-			wc.WebhookUrl != cfg.webhookURL {
-			// we need to re-register this channel
-			slog.Info("channel has expired or the webhook URL has changed")
-			register = append(register, wc)
-		}
+func (cfg *handlerConfig) registerWatchChannel(ctx context.Context, wc *types.WatchChannel) error {
+	if wc.ChannelID != "" {
+		cfg.dc.StopWatchChannel(wc)
 	}
 
-	return register, nil
+	// create the channel
+	err := cfg.dc.CreateWatchChannel(wc, cfg.webhookURL)
+	if err != nil {
+		slog.Error(
+			"Failed to create the watch channel",
+			"folderID",
+			wc.FolderID,
+			"channelID",
+			wc.ChannelID,
+			"error",
+			err,
+		)
+		return err
+	}
+
+	// Update the watch channel in the database
+	err = cfg.store.UpdateWatchChannel(ctx, wc)
+	if err != nil {
+		slog.Error(
+			"Failed to create or update the watch channel",
+			"folderID",
+			wc.FolderID,
+			"channelID",
+			wc.ChannelID,
+			"error",
+			err,
+		)
+		return err
+	}
+
+	return nil
+}
+
+func (cfg *handlerConfig) initializeWatchChannelLock(ctx context.Context, wc *types.WatchChannel) error {
+
+	// see if we have an existing lock table for the channel
+	_, err := cfg.store.GetWatchChannelLock(ctx, wc.ChannelID)
+	if err == nil {
+		// we have an existing lock for the channel, keep it so we pick up any changes from the last time it was updated
+		return nil
+	}
+
+	token, err := cfg.dc.GetChangesStartToken()
+	if err != nil {
+		slog.Error(
+			"Failed to get a Google Drive changes start token",
+			"error",
+			err,
+		)
+		return err
+	}
+
+	// create the watch channel lock
+	err = cfg.store.CreateWatchChannelLock(ctx, wc.ChannelID, token)
+	if err != nil {
+		slog.Error("Failed to save the changes token for the watch ")
+		return err
+	}
+
+	return nil
 }
 
 func process(ctx context.Context) error {
@@ -152,11 +190,9 @@ func process(ctx context.Context) error {
 		return err
 	}
 
-	var registerWatchChannels []*types.WatchChannel
-
 	// if we have not existing watch channels, then initialize a default one
 	if len(watchChannels) == 0 {
-		registerWatchChannels, err = cfg.initializeDefaultWatchChannels()
+		watchChannels, err = cfg.initializeDefaultWatchChannels()
 		if err != nil {
 			slog.Error(
 				"Failed to build the default watch channels",
@@ -165,61 +201,35 @@ func process(ctx context.Context) error {
 			)
 			return err
 		}
-
-	} else {
-		// determine which channels need to be re-registered
-		registerWatchChannels, err = cfg.getChannelsToRegister(watchChannels)
-		if err != nil {
-			slog.Error("Failed to determine which channels to re-register", "error", err)
-			return err
-		}
 	}
 
-	for _, wc := range registerWatchChannels {
-		err = cfg.dc.CreateWatchChannel(wc, cfg.webhookURL)
+	// register or re-register the watch channels
+	for _, wc := range watchChannels {
+		err = cfg.registerWatchChannel(ctx, wc)
 		if err != nil {
 			slog.Error(
-				"Failed to create the watch channel",
-				"folderID",
-				wc.FolderID,
+				"Failed to register the watch channel",
 				"channelID",
 				wc.ChannelID,
-				"error",
-				err,
-			)
-			continue
-		}
-
-		// Update the watch channel in the database
-		err = cfg.store.UpdateWatchChannel(ctx, wc)
-		if err != nil {
-			slog.Error(
-				"Failed to create or update the watch channel",
 				"folderID",
 				wc.FolderID,
-				"channelID",
-				wc.ChannelID,
 				"error",
 				err,
 			)
-			continue
 		}
 
-		token, err := cfg.dc.GetChangesStartToken()
+		// get an initial token for changes
+		err = cfg.initializeWatchChannelLock(ctx, wc)
 		if err != nil {
 			slog.Error(
-				"Failed to get a Google Drive changes start token",
+				"Failed to register the watch channel lock",
+				"channelID",
+				wc.ChannelID,
+				"folderID",
+				wc.FolderID,
 				"error",
 				err,
 			)
-			continue
-		}
-
-		// Update/create the watch channel lock
-		err = cfg.store.CreateChangesToken(ctx, wc.ChannelID, token)
-		if err != nil {
-			slog.Error("Failed to save the changes token for the watch ")
-			continue
 		}
 	}
 
