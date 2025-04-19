@@ -164,6 +164,14 @@ func (gd *GoogleDriveContext) QueryChanges(
 
 			seen[change.File.Id] = true
 
+			if seen[change.File.Name] {
+				slog.Warn("Already processed a document with this name", "name", change.File.Name)
+				continue
+			}
+
+			seen[change.File.Name] = true
+
+			// create a document structure to save
 			document, err := buildDocument(change.File)
 			if err != nil {
 				slog.Error(
@@ -176,6 +184,7 @@ func (gd *GoogleDriveContext) QueryChanges(
 				continue
 			}
 
+			// add to the list of documents to return
 			documents = append(documents, document)
 		}
 
