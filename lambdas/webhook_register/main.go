@@ -14,6 +14,7 @@ import (
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/google/uuid"
 )
 
 type handlerConfig struct {
@@ -105,12 +106,9 @@ func (cfg *handlerConfig) initializeDefaultWatchChannels() ([]*types.WatchChanne
 }
 
 func (cfg *handlerConfig) registerWatchChannel(ctx context.Context, wc *types.WatchChannel) error {
-	if wc.ChannelID != "" {
-		cfg.dc.StopWatchChannel(wc)
-	}
 
 	// create the channel
-	err := cfg.dc.CreateWatchChannel(wc, cfg.webhookURL)
+	resourceID, err := cfg.dc.CreateWatchChannel(wc)
 	if err != nil {
 		slog.Error(
 			"Failed to create the watch channel",
@@ -123,6 +121,9 @@ func (cfg *handlerConfig) registerWatchChannel(ctx context.Context, wc *types.Wa
 		)
 		return err
 	}
+
+	// save the resource id with the watch channel
+	wc.ResourceID = resourceID
 
 	// Update the watch channel in the database
 	err = cfg.store.UpdateWatchChannel(ctx, wc)
@@ -142,27 +143,34 @@ func (cfg *handlerConfig) registerWatchChannel(ctx context.Context, wc *types.Wa
 	return nil
 }
 
-func (cfg *handlerConfig) initializeWatchChannelLock(ctx context.Context, wc *types.WatchChannel) error {
+func (cfg *handlerConfig) initializeWatchChannelLock(
+	ctx context.Context,
+	wc *types.WatchChannel,
+	existingStartToken string,
+) error {
 
 	// see if we have an existing lock table for the channel
-	_, err := cfg.store.GetWatchChannelLock(ctx, wc.ChannelID)
+	existingWatchChannel, err := cfg.store.GetWatchChannelLock(ctx, wc.ChannelID)
 	if err == nil {
 		// we have an existing lock for the channel, keep it so we pick up any changes from the last time it was updated
+		slog.Info("Watch channel lock exists, use it", "channelID", wc.ChannelID, "watchChannel", existingWatchChannel)
 		return nil
 	}
 
-	token, err := cfg.dc.GetChangesStartToken()
-	if err != nil {
-		slog.Error(
-			"Failed to get a Google Drive changes start token",
-			"error",
-			err,
-		)
-		return err
+	if existingStartToken == "" {
+		existingStartToken, err = cfg.dc.GetChangesStartToken()
+		if err != nil {
+			slog.Error(
+				"Failed to get a Google Drive changes start token",
+				"error",
+				err,
+			)
+			return err
+		}
 	}
 
 	// create the watch channel lock
-	err = cfg.store.CreateWatchChannelLock(ctx, wc.ChannelID, token)
+	err = cfg.store.CreateWatchChannelLock(ctx, wc.ChannelID, existingStartToken)
 	if err != nil {
 		slog.Error("Failed to save the changes token for the watch ")
 		return err
@@ -205,6 +213,28 @@ func process(ctx context.Context) error {
 
 	// register or re-register the watch channels
 	for _, wc := range watchChannels {
+		existingToken := ""
+
+		// if we have an existing watch channel, stop it before creating a new one
+		if wc.ChannelID != "" {
+			cfg.dc.StopWatchChannel(wc.ChannelID, wc.ResourceID)
+
+			existingLock, err := cfg.store.GetWatchChannelLock(ctx, wc.ChannelID)
+			if err == nil {
+				// save the existing token to represent the last time we processed changes
+				existingToken = existingLock.ChangesStartToken
+
+				// delete the old channel lock
+				cfg.store.DeleteWatchChannelLock(ctx, wc.ChannelID)
+			}
+		}
+
+		// create a new channel
+		wc.ChannelID = uuid.New().String()
+		wc.ExpiresAt = time.Now().UTC().Add(48 * time.Hour).UnixMilli()
+		wc.WebhookUrl = cfg.webhookURL
+
+		// register the new channel
 		err = cfg.registerWatchChannel(ctx, wc)
 		if err != nil {
 			slog.Error(
@@ -219,7 +249,7 @@ func process(ctx context.Context) error {
 		}
 
 		// get an initial token for changes
-		err = cfg.initializeWatchChannelLock(ctx, wc)
+		err = cfg.initializeWatchChannelLock(ctx, wc, existingToken)
 		if err != nil {
 			slog.Error(
 				"Failed to register the watch channel lock",

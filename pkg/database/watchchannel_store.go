@@ -154,6 +154,10 @@ func (db *WatchChannelStoreContext) GetWatchChannelLock(
 		return nil, err
 	}
 
+	if len(result.Item) == 0 {
+		return nil, ErrWatchChannelLockNotFound
+	}
+
 	wc := &stypes.WatchChannelLock{}
 
 	err = attributevalue.UnmarshalMap(result.Item, wc)
@@ -194,6 +198,25 @@ func (db *WatchChannelStoreContext) CreateWatchChannelLock(
 			"error",
 			err,
 		)
+		return err
+	}
+
+	return nil
+}
+
+func (db *WatchChannelStoreContext) DeleteWatchChannelLock(ctx context.Context, channelID string) error {
+
+	deleteItemInput := &dynamodb.DeleteItemInput{
+
+		TableName: aws.String(WATCH_CHANNEL_LOCK_TABLE),
+		Key: map[string]types.AttributeValue{
+			"channel_id": &types.AttributeValueMemberS{Value: channelID},
+		},
+	}
+
+	_, err := db.store.DeleteItem(ctx, deleteItemInput)
+	if err != nil {
+		slog.Error("Failed to delete the watch channel lock", "channelID", channelID, "error", err)
 		return err
 	}
 

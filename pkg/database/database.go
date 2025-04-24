@@ -47,6 +47,7 @@ type (
 		GetWatchChannelByID(ctx context.Context, channelID string) (*stypes.WatchChannel, error)
 		GetWatchChannelLock(ctx context.Context, channelID string) (*stypes.WatchChannelLock, error)
 		CreateWatchChannelLock(ctx context.Context, channelID, startToken string) error
+		DeleteWatchChannelLock(ctx context.Context, channelID string) error
 		ClearWatchChannelLock(ctx context.Context, channelID, newStartToken string) error
 		AcquireChangesToken(ctx context.Context, channelID string) (string, error)
 		ReleaseChangesToken(ctx context.Context, channelID, newStartToken string) error
@@ -58,7 +59,8 @@ type (
 )
 
 var (
-	ErrDocumentNotFound = errors.New("document not found")
+	ErrDocumentNotFound         = errors.New("document not found")
+	ErrWatchChannelLockNotFound = errors.New("watch channel lock not found")
 )
 
 func buildUpdateExpression(

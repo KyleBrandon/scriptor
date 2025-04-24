@@ -332,20 +332,15 @@ func (gd *GoogleDriveContext) SaveFile(fileName, folderID string, reader io.Read
 	return nil
 }
 
-func (gd *GoogleDriveContext) CreateWatchChannel(wc *types.WatchChannel, url string) error {
+func (gd *GoogleDriveContext) CreateWatchChannel(wc *types.WatchChannel) (string, error) {
 	slog.Debug(">>createWatchChannel")
 	defer slog.Debug("<<createWatchChannel")
 
-	// Set the watch channel to expire in 2 days
-	wc.ChannelID = uuid.New().String()
-	wc.ExpiresAt = time.Now().UTC().Add(48 * time.Hour).UnixMilli()
-	wc.WebhookUrl = url
-
 	req := &drive.Channel{
 		Id:         wc.ChannelID,
-		Type:       "web_hook",
 		Address:    wc.WebhookUrl,
 		Expiration: wc.ExpiresAt,
+		Type:       "web_hook",
 	}
 
 	// Watch for changes in the folder
@@ -358,27 +353,24 @@ func (gd *GoogleDriveContext) CreateWatchChannel(wc *types.WatchChannel, url str
 			"error",
 			err,
 		)
-		return err
+		return "", err
 	}
 
-	// save the resource identifier from AWS for the channel
-	wc.ResourceID = channel.ResourceId
-
-	return nil
+	return channel.ResourceId, nil
 }
 
-func (gd *GoogleDriveContext) StopWatchChannel(wc *types.WatchChannel) error {
+func (gd *GoogleDriveContext) StopWatchChannel(channelID, resourceID string) error {
 	slog.Debug(">>stopWatchChannel")
 	defer slog.Debug("<<stopWatchChannel")
 
 	req := &drive.Channel{
-		Id:         wc.ChannelID,
-		ResourceId: wc.ResourceID,
+		Id:         channelID,
+		ResourceId: resourceID,
 	}
 
 	err := gd.driveService.Channels.Stop(req).Context(gd.ctx).Do()
 	if err != nil {
-		slog.Warn("Failed to stop the channel", "channelID", wc.ChannelID, "resourceID", wc.ResourceID, "error", err)
+		slog.Warn("Failed to stop the channel", "channelID", channelID, "resourceID", resourceID, "error", err)
 		return err
 	}
 
