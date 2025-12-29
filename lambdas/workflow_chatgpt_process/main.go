@@ -42,13 +42,16 @@ aliases: []
 tags:
   - daily-notes
 ---
+
+hub::
+project::
+
 `
-	FOOTER_TEMPLATE = "![[/Users/kyle.brandon/journal/attachments/%s]]"
+	FOOTER_TEMPLATE = "![[/Users/kyle.brandon/journal/06-files/%s]]"
 )
 
 // Load all the inital configuration settings for the lambda
 func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
-
 	cfg = &handlerConfig{}
 
 	var err error
@@ -207,9 +210,11 @@ func process(
 
 	// TODO: This should be a configuration
 	// build the header and footer for the note
+	name := util.GetNamePart(prevStage.OriginalFileName)
 	header := fmt.Sprintf(
 		HEADER_TEMPLATE,
-		util.GetNamePart(prevStage.OriginalFileName),
+		name,
+		name,
 	)
 	footer := fmt.Sprintf(FOOTER_TEMPLATE, prevStage.OriginalFileName)
 

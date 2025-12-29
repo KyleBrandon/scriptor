@@ -94,7 +94,6 @@ func getDriveService(ctx context.Context) (*drive.Service, error) {
 }
 
 func (gd *GoogleDriveContext) GetChangesStartToken() (string, error) {
-
 	slog.Debug(">>GetChangesStartToken")
 	defer slog.Debug("<<GetChangesStartToken")
 
@@ -226,7 +225,6 @@ func (gd *GoogleDriveContext) GetDocument(id string) (*types.Document, error) {
 }
 
 func buildDocument(file *drive.File) (*types.Document, error) {
-
 	createdTime, err := time.Parse(time.RFC3339, file.CreatedTime)
 	if err != nil {
 		slog.Warn(
@@ -270,7 +268,6 @@ func buildDocument(file *drive.File) (*types.Document, error) {
 	}
 
 	return document, nil
-
 }
 
 func (gd *GoogleDriveContext) Archive(id string, archiveFolderID string) error {
@@ -324,7 +321,6 @@ func (gd *GoogleDriveContext) SaveFile(fileName, folderID string, reader io.Read
 	_, err := gd.driveService.Files.Create(fileMetadata).
 		Media(reader).
 		Do()
-
 	if err != nil {
 		return fmt.Errorf("unable to upload file: %w", err)
 	}
