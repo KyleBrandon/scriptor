@@ -17,13 +17,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/sashabaranov/go-openai"
+	"github.com/openai/openai-go"
 )
 
 type handlerConfig struct {
 	store         database.DocumentStore
 	s3Client      *s3.Client
-	chatgptClient *openai.Client
+	chatgptClient openai.Client
 }
 
 var (
@@ -175,15 +175,15 @@ func process(
 	prompt := fmt.Sprintf(CHAT_PROMPT, content)
 
 	// // Call the ChatGPT API
-	gptResp, err := cfg.chatgptClient.CreateChatCompletion(
+	gptResp, err := cfg.chatgptClient.Chat.Completions.New(
 		ctx,
-		openai.ChatCompletionRequest{
-			Model: openai.GPT4o,
-			Messages: []openai.ChatCompletionMessage{
-				{Role: "system", Content: SYSTEM_MESSAGE},
-				{Role: "user", Content: prompt},
+		openai.ChatCompletionNewParams{
+			Model: openai.ChatModelGPT4oMini,
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage(SYSTEM_MESSAGE),
+				openai.UserMessage(prompt),
 			},
-			Temperature: 0.2, // Keep responses precise
+			Temperature: openai.Float(0.2), // Keep responses precise
 		},
 	)
 	if err != nil {
@@ -213,7 +213,6 @@ func process(
 	name := util.GetNamePart(prevStage.OriginalFileName)
 	header := fmt.Sprintf(
 		HEADER_TEMPLATE,
-		name,
 		name,
 	)
 	footer := fmt.Sprintf(FOOTER_TEMPLATE, prevStage.OriginalFileName)

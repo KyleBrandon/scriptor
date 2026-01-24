@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.38.1
 	github.com/aws/jsii-runtime-go v1.109.0
 	github.com/google/uuid v1.6.0
-	github.com/sashabaranov/go-openai v1.38.0
+	github.com/openai/openai-go v1.12.0
 	golang.org/x/oauth2 v0.26.0
 	google.golang.org/api v0.223.0
 )
@@ -56,6 +56,10 @@ require (
 	github.com/googleapis/gax-go/v2 v2.14.1 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/tidwall/gjson v1.14.4 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yuin/goldmark v1.4.13 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.59.0 // indirect

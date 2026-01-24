@@ -11,7 +11,8 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
-	"github.com/sashabaranov/go-openai"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 )
 
 func Assert[V comparable](got, expected V, message string) {
@@ -116,7 +117,7 @@ func GetDefaultFolderLocations(
 func CreateChatGPTClient(
 	ctx context.Context,
 	awsCfg aws.Config,
-) (*openai.Client, error) {
+) (openai.Client, error) {
 
 	svc := secretsmanager.NewFromConfig(awsCfg)
 
@@ -125,17 +126,17 @@ func CreateChatGPTClient(
 
 	result, err := svc.GetSecretValue(ctx, input)
 	if err != nil {
-		return nil, err
+		return openai.Client{}, err
 	}
 
 	var chatgptSecrets types.ChatGptSecrets
 
 	err = json.Unmarshal([]byte(*result.SecretString), &chatgptSecrets)
 	if err != nil {
-		return nil, err
+		return openai.Client{}, err
 	}
 
-	client := openai.NewClient(chatgptSecrets.ApiKey)
+	client := openai.NewClient(option.WithAPIKey(chatgptSecrets.ApiKey))
 	return client, nil
 }
 
