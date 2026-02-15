@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,17 +14,17 @@ import (
 	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/types"
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/openai/openai-go"
 )
 
 type handlerConfig struct {
-	store         database.DocumentStore
-	s3Client      *s3.Client
-	chatgptClient openai.Client
+	store        database.DocumentStore
+	s3Client     *s3.Client
+	claudeClient *anthropic.Client
 }
 
 var (
@@ -33,22 +34,34 @@ var (
 )
 
 const (
-	SYSTEM_MESSAGE = "You are an AI that processes Markdown text. Your task is to clean up the input by fixing Markdown syntax, correcting spelling and grammar, and ensuring proper formatting. Do NOT include any extra explanations, comments, or surrounding text—only return the valid Markdown output."
-	CHAT_PROMPT    = "Here is a Markdown file that was generated via OCR. Fix the Markdown formatting, correct any spelling and grammar errors, and ensure the syntax is valid. Do not add any explanations,comments, and do not surround the document text in a markdown code block. ONLY RETURN THE CLEANED MARKDOWN CONTENT AND NOTHING ELSE:\n\n%s"
+	SYSTEM_MESSAGE = "You are a document restoration specialist. You receive an original PDF and a Markdown transcription produced by OCR. Your job is to produce a corrected Markdown version that faithfully represents the original document. Always prefer what the PDF shows over what the OCR produced. Return only valid Markdown with no commentary."
+	CHAT_PROMPT    = `Below is a Markdown file generated from the attached PDF via OCR (Mathpix). Compare it against the original PDF and correct the Markdown so it faithfully represents the source document.
+
+Priority order:
+1. **Content accuracy** — Fix misread words, numbers, and characters (e.g. "rn" → "m", "l" → "1", "O" → "0"). Use the PDF as the source of truth.
+2. **Structure** — Ensure headings, lists, tables, and block quotes match the PDF layout. Fix broken table alignment, merged or split rows, and incorrect nesting.
+3. **Math and symbols** — Verify LaTeX expressions, currency symbols, units, and special characters against the PDF.
+4. **Formatting** — Fix Markdown syntax errors, stray artifacts (e.g. random backslashes, repeated characters), and unnecessary line breaks.
+5. **Spelling and grammar** — Correct any remaining errors, but do not rephrase or rewrite the author's original text.
+
+Do not add explanations, comments, or wrap the output in a code block. Return ONLY the corrected Markdown.
+
+%s`
 
 	HEADER_TEMPLATE = `---
 id: "%s"
 aliases: []
 tags:
-  - daily-notes
+  - reMarkable
 ---
 
-hub::
-project::
+People:
+Projects:
+Zettel:
 
 `
 
-	FOOTER_TEMPLATE = "![[/Users/kyle/Library/Mobile Documents/iCloud~md~obsidian/Documents/Arx/%s]]"
+	FOOTER_TEMPLATE = "![[attachments/%s]]"
 )
 
 // Load all the inital configuration settings for the lambda
@@ -71,9 +84,9 @@ func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 
 	cfg.s3Client = s3.NewFromConfig(awsCfg)
 
-	cfg.chatgptClient, err = util.CreateChatGPTClient(ctx, awsCfg)
+	cfg.claudeClient, err = util.CreateClaudeClient(ctx, awsCfg)
 	if err != nil {
-		slog.Error("Failed to create a client to the ChatGPT API", "error", err)
+		slog.Error("Failed to create a client to the Claude API", "error", err)
 		return nil, err
 	}
 
@@ -126,10 +139,60 @@ func process(
 		return ret, err
 	}
 
-	chatgptStage, err := cfg.store.StartDocumentStage(
+	// Get the downloaded stage to retrieve the original PDF
+	downloadedStage, err := cfg.store.GetDocumentStage(
 		ctx,
 		event.DocumentID,
-		types.DOCUMENT_STAGE_CHATGPT,
+		types.DOCUMENT_STAGE_DOWNLOAD,
+	)
+	if err != nil {
+		slog.Error(
+			"Failed to get the downloaded stage information",
+			"id",
+			event.DocumentID,
+			"error",
+			err,
+		)
+		return ret, err
+	}
+
+	// Download the original PDF from S3
+	pdfResp, err := cfg.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(types.S3_BUCKET_NAME),
+		Key:    aws.String(downloadedStage.S3Key),
+	})
+	if err != nil {
+		slog.Error(
+			"Failed to get the PDF from S3",
+			"docName",
+			prevStage.OriginalFileName,
+			"key",
+			downloadedStage.S3Key,
+			"error",
+			err,
+		)
+		return ret, err
+	}
+	defer pdfResp.Body.Close()
+
+	pdfBytes, err := io.ReadAll(pdfResp.Body)
+	if err != nil {
+		slog.Error(
+			"Failed to read the PDF content",
+			"docName",
+			prevStage.OriginalFileName,
+			"error",
+			err,
+		)
+		return ret, err
+	}
+
+	pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
+
+	claudeStage, err := cfg.store.StartDocumentStage(
+		ctx,
+		event.DocumentID,
+		types.DOCUMENT_STAGE_CLAUDE,
 		prevStage.OriginalFileName,
 	)
 	if err != nil {
@@ -172,24 +235,31 @@ func process(
 		return ret, err
 	}
 
-	// // Create a prompt for GPT to clean up the Markdown
+	// Create a prompt for Claude to clean up the Markdown
 	prompt := fmt.Sprintf(CHAT_PROMPT, content)
 
-	// // Call the ChatGPT API
-	gptResp, err := cfg.chatgptClient.Chat.Completions.New(
+	// Call the Claude API with the original PDF and Markdown prompt
+	claudeResp, err := cfg.claudeClient.Messages.New(
 		ctx,
-		openai.ChatCompletionNewParams{
-			Model: openai.ChatModelGPT4oMini,
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(SYSTEM_MESSAGE),
-				openai.UserMessage(prompt),
+		anthropic.MessageNewParams{
+			Model:     anthropic.ModelClaudeSonnet4_5_20250929,
+			MaxTokens: 8192,
+			System: []anthropic.TextBlockParam{
+				{Text: SYSTEM_MESSAGE},
 			},
-			Temperature: openai.Float(0.2), // Keep responses precise
+			Messages: []anthropic.MessageParam{
+				anthropic.NewUserMessage(
+					anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+						Data: pdfBase64,
+					}),
+					anthropic.NewTextBlock(prompt),
+				),
+			},
 		},
 	)
 	if err != nil {
 		slog.Error(
-			"ChatGPT API error",
+			"Claude API error",
 			"docName",
 			prevStage.OriginalFileName,
 			"error",
@@ -198,12 +268,10 @@ func process(
 		return ret, err
 	}
 
-	// // Get the cleaned-up text
-	buffer := gptResp.Choices[0].Message.Content
+	// Get the cleaned-up text
+	buffer := claudeResp.Content[0].Text
 
-	// For some reason ChatGPT will occasionally surround the entire processed output with
-	// a Markdown code block. Check to see if the document is surrounded in a code block.
-	// If so, remove it.
+	// Safety check: remove markdown code block wrapping if present
 	cleanedMarkdown := strings.TrimPrefix(
 		strings.TrimSuffix(string(buffer), "```"),
 		"```markdown",
@@ -227,21 +295,21 @@ func process(
 	// Get the original document name w/o extension
 	documentName := util.GetNamePart(prevStage.OriginalFileName)
 
-	chatgptStage.StageFileName = fmt.Sprintf(
+	claudeStage.StageFileName = fmt.Sprintf(
 		"%s-%d.md",
 		documentName,
 		time.Now().Unix(),
 	)
-	chatgptStage.S3Key = fmt.Sprintf(
+	claudeStage.S3Key = fmt.Sprintf(
 		"%s/%s",
-		chatgptStage.Stage,
-		chatgptStage.StageFileName,
+		claudeStage.Stage,
+		claudeStage.StageFileName,
 	)
 
 	//
 	_, err = cfg.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
-		Key:           aws.String(chatgptStage.S3Key),
+		Key:           aws.String(claudeStage.S3Key),
 		Body:          bytes.NewReader(body),
 		ContentType:   aws.String("text/markdown"),
 		ContentLength: aws.Int64(int64(len(body))),
@@ -252,7 +320,7 @@ func process(
 			"docName",
 			prevStage.OriginalFileName,
 			"key",
-			chatgptStage.S3Key,
+			claudeStage.S3Key,
 			"error",
 			err,
 		)
@@ -260,7 +328,7 @@ func process(
 	}
 
 	// Update the stage to complete
-	err = cfg.store.CompleteDocumentStage(ctx, chatgptStage)
+	err = cfg.store.CompleteDocumentStage(ctx, claudeStage)
 	if err != nil {
 		slog.Error(
 			"Failed to update the processing stage as complete",
@@ -275,7 +343,7 @@ func process(
 	// read doc from bucket
 	ret.NotificationID = event.NotificationID
 	ret.DocumentID = event.DocumentID
-	ret.Stage = types.DOCUMENT_STAGE_CHATGPT
+	ret.Stage = types.DOCUMENT_STAGE_CLAUDE
 
 	return ret, nil
 }

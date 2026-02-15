@@ -83,16 +83,16 @@ func (cfg *CdkScriptorConfig) configureMathpixLambda(
 	return mathpixLambda
 }
 
-func (cfg *CdkScriptorConfig) configureChatgptLambda(
+func (cfg *CdkScriptorConfig) configureClaudeLambda(
 	stack awscdk.Stack,
 ) awslambda.Function {
-	chatgptLambda := awslambda.NewFunction(
+	claudeLambda := awslambda.NewFunction(
 		stack,
-		jsii.String("scriptorChatGPTProcess"),
+		jsii.String("scriptorClaudeProcess"),
 		&awslambda.FunctionProps{
 			Runtime: awslambda.Runtime_PROVIDED_AL2(),
 			Code: awslambda.AssetCode_FromAsset(
-				jsii.String("../bin/workflow_chatgpt_process.zip"),
+				jsii.String("../bin/workflow_claude_process.zip"),
 				nil,
 			),
 			Handler: jsii.String("main"),
@@ -100,16 +100,16 @@ func (cfg *CdkScriptorConfig) configureChatgptLambda(
 		},
 	)
 
-	// grant the lambda permission to read the ChatGPT API key secret
-	cfg.ChatgptSecrets.GrantRead(chatgptLambda, nil)
+	// grant the lambda permission to read the Claude API key secret
+	cfg.ClaudeSecrets.GrantRead(claudeLambda, nil)
 
 	// grant the lambda read/write permissions to the S3 staging bucket
-	cfg.documentBucket.GrantReadWrite(chatgptLambda, nil)
+	cfg.documentBucket.GrantReadWrite(claudeLambda, nil)
 
 	// grant the lambda r/w permissions to the document table
-	cfg.documentProcessingStageTable.GrantReadWriteData(chatgptLambda)
+	cfg.documentProcessingStageTable.GrantReadWriteData(claudeLambda)
 
-	return chatgptLambda
+	return claudeLambda
 }
 
 func (cfg *CdkScriptorConfig) configureUploadLambda(
@@ -145,7 +145,7 @@ func (cfg *CdkScriptorConfig) configureUploadLambda(
 func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 	downloadLambda := cfg.configureDownloadLambda(stack)
 	mathpixLambda := cfg.configureMathpixLambda(stack)
-	chatgptLambda := cfg.configureChatgptLambda(stack)
+	claudeLambda := cfg.configureClaudeLambda(stack)
 	uploadLambda := cfg.configureUploadLambda(stack)
 
 	taskTimeout := awsstepfunctions.Timeout_Duration(
@@ -172,11 +172,11 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 		},
 	)
 
-	chatgptTask := awsstepfunctionstasks.NewLambdaInvoke(
+	claudeTask := awsstepfunctionstasks.NewLambdaInvoke(
 		stack,
-		jsii.String("ChatGPTTask"),
+		jsii.String("ClaudeTask"),
 		&awsstepfunctionstasks.LambdaInvokeProps{
-			LambdaFunction: chatgptLambda,
+			LambdaFunction: claudeLambda,
 			TaskTimeout:    taskTimeout,
 			OutputPath:     jsii.String("$.Payload"),
 		},
@@ -194,7 +194,7 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 
 	// Define workflow sequence
 	workflowDefinition := downloadTask.Next(mathpixTask).
-		Next(chatgptTask).
+		Next(claudeTask).
 		Next(uploadTask)
 
 	// Create Step Functions state machine

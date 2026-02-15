@@ -22,25 +22,51 @@ This lambda is configured behind an API Gateway and will receive the webhook not
 
 This lambda is the first step in the state machine and will leverage [Mathpix](https://mathpix.com). The document from the previous stage, scriptorDownloadLambda, is copied into a multi-part form and sent to the Mathpix API. The conversion status is polled and the resultant Markdown file is copied to S3. Information on the conversion and location of the markdown is sent to the next step in the state machine.
 
-### scriptorChatGPTProcess
+### scriptorClaudeProcess
 
-This lambda is used to clean up the Markdown from Mathpix. The file from Mathpix is downloaded and sent to ChatGPT with a prompt indicating it should fix any Markdown syntax errors, spelling errors, and grammatical errors. It will also remove any tendency of ChatGPT to enclose the entire document in a Markdown code block.
+This lambda is used to clean up the Markdown from Mathpix. The file from Mathpix is downloaded and sent to Claude with a prompt indicating it should fix any Markdown syntax errors, spelling errors, and grammatical errors. It will also remove any tendency to enclose the entire document in a Markdown code block.
 
 ### scriptorUploadLambda
 
-This final step in the state machine will upload the final ChatGPT cleaned Markdown as well as the original PDF back to Google Drive into the configured destination folder. It will move the original PDF located in the monitor folder to a configured archive folder so it does not process it again inadvertently. Once done, the state machine is complete.
+This final step in the state machine will upload the final Claude cleaned Markdown as well as the original PDF back to Google Drive into the configured destination folder. It will move the original PDF located in the monitor folder to a configured archive folder so it does not process it again inadvertently. Once done, the state machine is complete.
 
 ## Installation
 
-### TBD write up installing the Lambdas
+### Prerequisites
 
-### AWS Secrets Manager configuration
+- [Go](https://go.dev/dl/) 1.23 or later
+- [AWS CLI](https://aws.amazon.com/cli/) configured with credentials
+- [AWS CDK](https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html) v2 installed (`npm install -g aws-cdk`)
+- A Google Cloud project with a service account
+- A Mathpix account with API access
+- An Anthropic account with API access
+
+### Building
+
+Build all Lambda functions:
+
+```bash
+make all
+```
+
+This cross-compiles each Lambda for `linux/amd64` and packages them as zip files in `./bin/`.
+
+### Deploying
+
+Preview infrastructure changes, then deploy:
+
+```bash
+make cdk-diff       # Build lambdas + show CDK diff
+make cdk-deploy     # Build, diff, deploy all stacks to AWS
+```
+
+### AWS Secrets Manager Configuration
 
 The following secrets need to be configured in AWS Secrets Manager. These are configured in AWS as "Other type of secret" and stored as key/value pairs.
 
 #### scriptor/google-folder-defaults
 
-This contains the Google Drive folder identifiers that are used to monitor for and store the documents. In your Google Drive account create a folder called **Scriptor**. This is your Scriptor Root Folder and will be used as the root folder to contain all the documents that Scriptor works with. ;aThe following key/value pairs must be configured:a
+This contains the Google Drive folder identifiers that are used to monitor for and store the documents. In your Google Drive account create a folder called **Scriptor**. This is your Scriptor Root Folder and will be used as the root folder to contain all the documents that Scriptor works with. The following key/value pairs must be configured:
 
 - `folder_id`: "identifier of the folder to watch for PDF files"
 - `archive_folder_id`: "identifier of the folder to archive PDF files that have been processed"
@@ -97,8 +123,25 @@ You will want to create a Secrets Manager secret titled `scriptor/mathpix` with 
 - `mathpix_app_id`: "<Your APP ID from Mathix>"
 - `mathpix_app_key`: "<Your APP KEY from Mathpix>"
 
-#### scriptor/chatgpt
+#### scriptor/claude
 
-This contains the ChatGPT API key:
+This contains the Anthropic API key used by the Claude Markdown cleanup Lambda.
 
-- `api_key`: "<API key from ChatGPT>"
+##### Getting an Anthropic API Key
+
+1. Go to the [Anthropic Console](https://console.anthropic.com/).
+2. Create an account or sign in.
+3. Navigate to **Settings → API Keys**.
+4. Click **Create Key**.
+5. Give the key a name (e.g. "scriptor") and click **Create Key**.
+6. Copy the key immediately -- it will not be shown again.
+
+##### Creating the Secret
+
+Create a Secrets Manager secret titled `scriptor/claude` of type "Other type of secret" with the following key/value pair:
+
+- `api_key`: "<Your API key from Anthropic>"
+
+##### Anthropic API Pricing
+
+Scriptor uses Claude Sonnet 4.5 for Markdown cleanup. Pricing is per-token and based on the size of each document processed. See [Anthropic pricing](https://www.anthropic.com/pricing) for current rates.
