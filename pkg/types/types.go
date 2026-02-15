@@ -15,8 +15,8 @@ const (
 	// Mathpix secrets for using the Mathpix API
 	MATHPIX_SECRETS = "scriptor/mathpix"
 
-	// ChatGPT secrets for using the API
-	CHATGPT_SECRETS = "scriptor/chatgpt"
+	// Claude secrets for using the Anthropic API
+	CLAUDE_SECRETS = "scriptor/claude"
 
 	// Google Drive folder identifiers for default monitoring
 	GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS = "scriptor/google-folder-defaults"
@@ -37,8 +37,8 @@ const (
 	// Document stage Mathpix
 	DOCUMENT_STAGE_MATHPIX = "mathpix"
 
-	// Document stage ChatGPT
-	DOCUMENT_STAGE_CHATGPT = "chatgpt"
+	// Document stage Claude
+	DOCUMENT_STAGE_CLAUDE = "claude"
 
 	// Document stage uploaded
 	DOCUMENT_STAGE_UPLOAD = "uploaded"
@@ -71,8 +71,8 @@ type (
 		AppKey string `json:"mathpix_app_key"`
 	}
 
-	// ChatGPT API key
-	ChatGptSecrets struct {
+	// Claude API key
+	ClaudeSecrets struct {
 		ApiKey string `json:"api_key"`
 	}
 

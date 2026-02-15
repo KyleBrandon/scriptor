@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Scriptor is a serverless document processing pipeline on AWS. It monitors a Google Drive folder for PDFs, converts them to Markdown via Mathpix, cleans up the Markdown with ChatGPT, and uploads the results back to Google Drive. Built with Go and AWS CDK (Go bindings).
+Scriptor is a serverless document processing pipeline on AWS. It monitors a Google Drive folder for PDFs, converts them to Markdown via Mathpix, cleans up the Markdown with Claude, and uploads the results back to Google Drive. Built with Go and AWS CDK (Go bindings).
 
 ## Build & Deploy Commands
 
@@ -29,7 +29,7 @@ There are no automated tests in this codebase.
 4. **Step Functions workflow** (sequential):
    - `workflow_download` → Downloads PDF from Drive to S3
    - `workflow_mathpix_process` → PDF→Markdown via Mathpix API
-   - `workflow_chatgpt_process` → Markdown cleanup via OpenAI API
+   - `workflow_claude_process` → Markdown cleanup via Anthropic API
    - `workflow_upload` → Uploads Markdown+PDF to destination folder, archives original
 
 ### Code Layout
@@ -62,7 +62,7 @@ func initLambda(ctx context.Context) error {
 
 **Database**: Use `database.New*Store(ctx)` constructors. Check for `ErrDocumentNotFound` and `ErrWatchChannelLockNotFound`. All structs use `dynamodbav` tags. Use `context.Context` for all database calls.
 
-**S3 keys**: `{documentID}/{stage}/{filename}.{ext}` where stage is `downloaded`, `mathpix`, or `chatgpt`.
+**S3 keys**: `{documentID}/{stage}/{filename}.{ext}` where stage is `downloaded`, `mathpix`, or `claude`.
 
 **CDK permissions**: Use grant methods on CDK constructs:
 
@@ -72,7 +72,7 @@ cfg.documentTable.GrantReadWriteData(lambda)
 cfg.documentBucket.GrantReadWrite(lambda, nil)
 ```
 
-**Document stages**: `new` → `downloaded` → `mathpix` → `chatgpt` → `uploaded`, each with status tracking (pending/in-progress/complete/error).
+**Document stages**: `new` → `downloaded` → `mathpix` → `claude` → `uploaded`, each with status tracking (pending/in-progress/complete/error).
 
 ### DynamoDB Tables
 
@@ -95,7 +95,7 @@ All secrets are "Other type of secret" with key/value pairs:
 3. `scriptor/mathpix`:
    - `mathpix_app_id`
    - `mathpix_app_key`
-4. `scriptor/chatgpt`:
+4. `scriptor/claude`:
    - `api_key`
 
 ### Google Drive Setup
