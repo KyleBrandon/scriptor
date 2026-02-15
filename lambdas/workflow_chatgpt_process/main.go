@@ -47,7 +47,8 @@ hub::
 project::
 
 `
-	FOOTER_TEMPLATE = "![[/Users/kyle.brandon/journal/06-files/%s]]"
+
+	FOOTER_TEMPLATE = "![[/Users/kyle/Library/Mobile Documents/iCloud~md~obsidian/Documents/Arx/%s]]"
 )
 
 // Load all the inital configuration settings for the lambda
