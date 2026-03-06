@@ -25,7 +25,7 @@ func (cfg *CdkScriptorConfig) configureDownloadLambda(
 		stack,
 		jsii.String("scriptorDownloadLambda"),
 		&awslambda.FunctionProps{
-			Runtime: awslambda.Runtime_PROVIDED_AL2(),
+			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
 			Code: awslambda.AssetCode_FromAsset(
 				jsii.String("../bin/workflow_download.zip"),
 				nil,
@@ -58,7 +58,7 @@ func (cfg *CdkScriptorConfig) configureMathpixLambda(
 		stack,
 		jsii.String("scriptorMathpixProcess"),
 		&awslambda.FunctionProps{
-			Runtime: awslambda.Runtime_PROVIDED_AL2(),
+			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
 			Code: awslambda.AssetCode_FromAsset(
 				jsii.String("../bin/workflow_mathpix_process.zip"),
 				nil,
@@ -90,7 +90,7 @@ func (cfg *CdkScriptorConfig) configureClaudeLambda(
 		stack,
 		jsii.String("scriptorClaudeProcess"),
 		&awslambda.FunctionProps{
-			Runtime: awslambda.Runtime_PROVIDED_AL2(),
+			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
 			Code: awslambda.AssetCode_FromAsset(
 				jsii.String("../bin/workflow_claude_process.zip"),
 				nil,
@@ -119,7 +119,7 @@ func (cfg *CdkScriptorConfig) configureUploadLambda(
 		stack,
 		jsii.String("scriptorUploadLambda"),
 		&awslambda.FunctionProps{
-			Runtime: awslambda.Runtime_PROVIDED_AL2(),
+			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
 			Code: awslambda.AssetCode_FromAsset(
 				jsii.String("../bin/workflow_upload.zip"),
 				nil,

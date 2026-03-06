@@ -14,7 +14,7 @@ func (cfg *CdkScriptorConfig) NewSQSHandlerStack(id string) awscdk.Stack {
 		stack,
 		jsii.String("scriptorSQSHandlerLambda"),
 		&awslambda.FunctionProps{
-			Runtime: awslambda.Runtime_PROVIDED_AL2(),
+			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
 			Code: awslambda.AssetCode_FromAsset(
 				jsii.String("../bin/sqs_handler.zip"),
 				nil,

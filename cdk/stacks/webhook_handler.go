@@ -17,7 +17,7 @@ func (cfg *CdkScriptorConfig) NewWebhookHandlerStack(id string) awscdk.Stack {
 		stack,
 		jsii.String("scriptorWebhookHandlerLambda"),
 		&awslambda.FunctionProps{
-			Runtime: awslambda.Runtime_PROVIDED_AL2(),
+			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
 			Code: awslambda.AssetCode_FromAsset(
 				jsii.String("../bin/webhook_handler.zip"),
 				nil,
