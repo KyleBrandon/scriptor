@@ -30,6 +30,40 @@ This lambda is used to clean up the Markdown from Mathpix. The file from Mathpix
 
 This final step in the state machine will upload the final Claude cleaned Markdown as well as the original PDF back to Google Drive into the configured destination folder. It will move the original PDF located in the monitor folder to a configured archive folder so it does not process it again inadvertently. Once done, the state machine is complete.
 
+## Architecture and Operational Constraints
+
+### End-to-End Processing Stages
+
+Documents progress through these stages:
+
+`new` -> `downloaded` -> `mathpix` -> `claude` -> `uploaded`
+
+Each stage tracks status (`pending`, `in-progress`, `complete`, `error`) in DynamoDB.
+
+### Runtime Limits and Reliability Rules
+
+- Step Functions workflow timeout: 15 minutes total
+- Per-task timeout: 3 minutes
+- All timestamps are stored in UTC
+- Files with the same name in the same Drive folder are de-duplicated
+- Google Drive watch channels are created for 48 hours and renewed when expiry is within ~20 hours
+- Watch channel locks expire to recover from interrupted Lambda executions
+
+### Core Data and Storage Conventions
+
+- DynamoDB tables:
+  - `Documents`
+  - `DocumentProcessingStage`
+  - `WatchChannels`
+  - `WatchChannelLocks`
+- S3 object key pattern:
+  - `{documentID}/{stage}/{filename}.{ext}`
+  - Example: `abc123/mathpix/report.md`
+
+### Contributor Docs
+
+For contributor workflow, coding conventions, and PR expectations, see [`AGENTS.md`](AGENTS.md).
+
 ## Installation
 
 ### Prerequisites
