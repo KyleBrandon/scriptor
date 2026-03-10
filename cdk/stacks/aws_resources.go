@@ -35,10 +35,10 @@ func (cfg *CdkScriptorConfig) initializeSecretsManager(stack awscdk.Stack) {
 	)
 
 	// Reference an existing secret in AWS Secrets Manager
-	cfg.ClaudeSecrets = awssecretsmanager.Secret_FromSecretNameV2(
+	cfg.OpenAISecrets = awssecretsmanager.Secret_FromSecretNameV2(
 		stack,
-		jsii.String(types.CLAUDE_SECRETS),
-		jsii.String(types.CLAUDE_SECRETS),
+		jsii.String(types.OPENAI_SECRETS),
+		jsii.String(types.OPENAI_SECRETS),
 	)
 
 }

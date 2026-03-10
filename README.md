@@ -22,13 +22,13 @@ This lambda is configured behind an API Gateway and will receive the webhook not
 
 This lambda is the first step in the state machine and will leverage [Mathpix](https://mathpix.com). The document from the previous stage, scriptorDownloadLambda, is copied into a multi-part form and sent to the Mathpix API. The conversion status is polled and the resultant Markdown file is copied to S3. Information on the conversion and location of the markdown is sent to the next step in the state machine.
 
-### scriptorClaudeProcess
+### scriptorOpenAIProcess
 
-This lambda is used to clean up the Markdown from Mathpix. The file from Mathpix is downloaded and sent to Claude with a prompt indicating it should fix any Markdown syntax errors, spelling errors, and grammatical errors. It will also remove any tendency to enclose the entire document in a Markdown code block.
+This lambda is used to clean up the Markdown from Mathpix. The file from Mathpix is downloaded and sent to OpenAI, along with the original PDF, so the model can correct OCR issues against the source document and return cleaned Markdown. The Lambda name is historical; the provider is now OpenAI.
 
 ### scriptorUploadLambda
 
-This final step in the state machine will upload the final Claude cleaned Markdown as well as the original PDF back to Google Drive into the configured destination folder. It will move the original PDF located in the monitor folder to a configured archive folder so it does not process it again inadvertently. Once done, the state machine is complete.
+This final step in the state machine will upload the final LLM-cleaned Markdown as well as the original PDF back to Google Drive into the configured destination folder. It will move the original PDF located in the monitor folder to a configured archive folder so it does not process it again inadvertently. Once done, the state machine is complete.
 
 ## Architecture and Operational Constraints
 
@@ -36,7 +36,7 @@ This final step in the state machine will upload the final Claude cleaned Markdo
 
 Documents progress through these stages:
 
-`new` -> `downloaded` -> `mathpix` -> `claude` -> `uploaded`
+`new` -> `downloaded` -> `mathpix` -> `openai` -> `uploaded`
 
 Each stage tracks status (`pending`, `in-progress`, `complete`, `error`) in DynamoDB.
 
@@ -73,7 +73,7 @@ For contributor workflow, coding conventions, and PR expectations, see [`AGENTS.
 - [AWS CDK](https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html) v2 installed (`npm install -g aws-cdk`)
 - A Google Cloud project with a service account
 - A Mathpix account with API access
-- An Anthropic account with API access
+- An OpenAI account with API access
 
 ### Building
 
@@ -157,25 +157,25 @@ You will want to create a Secrets Manager secret titled `scriptor/mathpix` with 
 - `mathpix_app_id`: "<Your APP ID from Mathix>"
 - `mathpix_app_key`: "<Your APP KEY from Mathpix>"
 
-#### scriptor/claude
+#### scriptor/openai
 
-This contains the Anthropic API key used by the Claude Markdown cleanup Lambda.
+This contains the OpenAI API key used by the Markdown cleanup Lambda.
 
-##### Getting an Anthropic API Key
+##### Getting an OpenAI API Key
 
-1. Go to the [Anthropic Console](https://console.anthropic.com/).
+1. Go to the [OpenAI Platform](https://platform.openai.com/).
 2. Create an account or sign in.
-3. Navigate to **Settings → API Keys**.
+3. Navigate to **API keys**.
 4. Click **Create Key**.
 5. Give the key a name (e.g. "scriptor") and click **Create Key**.
 6. Copy the key immediately -- it will not be shown again.
 
 ##### Creating the Secret
 
-Create a Secrets Manager secret titled `scriptor/claude` of type "Other type of secret" with the following key/value pair:
+Create a Secrets Manager secret titled `scriptor/openai` of type "Other type of secret" with the following key/value pair:
 
-- `api_key`: "<Your API key from Anthropic>"
+- `api_key`: "<Your API key from OpenAI>"
 
-##### Anthropic API Pricing
+##### OpenAI API Pricing
 
-Scriptor uses Claude Sonnet 4.5 for Markdown cleanup. Pricing is per-token and based on the size of each document processed. See [Anthropic pricing](https://www.anthropic.com/pricing) for current rates.
+Scriptor uses OpenAI for Markdown cleanup. Pricing is per-token and based on the size of each document processed. See [OpenAI pricing](https://openai.com/api/pricing/) for current rates.

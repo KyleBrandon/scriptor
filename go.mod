@@ -3,7 +3,6 @@ module github.com/KyleBrandon/scriptor
 go 1.23.4
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.22.1
 	github.com/aws/aws-cdk-go/awscdk/v2 v2.185.0
 	github.com/aws/aws-lambda-go v1.47.0
 	github.com/aws/aws-sdk-go v1.55.6
@@ -17,6 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.38.1
 	github.com/aws/jsii-runtime-go v1.109.0
 	github.com/google/uuid v1.6.0
+	github.com/openai/openai-go/v3 v3.26.0
 	golang.org/x/oauth2 v0.30.0
 	google.golang.org/api v0.223.0
 )

@@ -15,8 +15,8 @@ const (
 	// Mathpix secrets for using the Mathpix API
 	MATHPIX_SECRETS = "scriptor/mathpix"
 
-	// Claude secrets for using the Anthropic API
-	CLAUDE_SECRETS = "scriptor/claude"
+	// OpenAI secrets for using the OpenAI API
+	OPENAI_SECRETS = "scriptor/openai"
 
 	// Google Drive folder identifiers for default monitoring
 	GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS = "scriptor/google-folder-defaults"
@@ -37,8 +37,8 @@ const (
 	// Document stage Mathpix
 	DOCUMENT_STAGE_MATHPIX = "mathpix"
 
-	// Document stage Claude
-	DOCUMENT_STAGE_CLAUDE = "claude"
+	// Document stage for the LLM cleanup step.
+	DOCUMENT_STAGE_OPENAI = "openai"
 
 	// Document stage uploaded
 	DOCUMENT_STAGE_UPLOAD = "uploaded"
@@ -71,8 +71,8 @@ type (
 		AppKey string `json:"mathpix_app_key"`
 	}
 
-	// Claude API key
-	ClaudeSecrets struct {
+	// OpenAI API key
+	OpenAISecrets struct {
 		ApiKey string `json:"api_key"`
 	}
 

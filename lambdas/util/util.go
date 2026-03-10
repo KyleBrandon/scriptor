@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	"github.com/KyleBrandon/scriptor/pkg/types"
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 )
 
 func Assert[V comparable](got, expected V, message string) {
@@ -114,30 +114,30 @@ func GetDefaultFolderLocations(
 	return &folderLocations, nil
 }
 
-func CreateClaudeClient(
+func CreateOpenAIClient(
 	ctx context.Context,
 	awsCfg aws.Config,
-) (*anthropic.Client, error) {
+) (openai.Client, error) {
 
 	svc := secretsmanager.NewFromConfig(awsCfg)
 
-	secretName := types.CLAUDE_SECRETS
+	secretName := types.OPENAI_SECRETS
 	input := &secretsmanager.GetSecretValueInput{SecretId: &secretName}
 
 	result, err := svc.GetSecretValue(ctx, input)
 	if err != nil {
-		return nil, err
+		return openai.Client{}, err
 	}
 
-	var claudeSecrets types.ClaudeSecrets
+	var openAISecrets types.OpenAISecrets
 
-	err = json.Unmarshal([]byte(*result.SecretString), &claudeSecrets)
+	err = json.Unmarshal([]byte(*result.SecretString), &openAISecrets)
 	if err != nil {
-		return nil, err
+		return openai.Client{}, err
 	}
 
-	client := anthropic.NewClient(option.WithAPIKey(claudeSecrets.ApiKey))
-	return &client, nil
+	client := openai.NewClient(option.WithAPIKey(openAISecrets.ApiKey))
+	return client, nil
 }
 
 func LoadMathpixSecrets(

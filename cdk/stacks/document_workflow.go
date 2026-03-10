@@ -83,16 +83,16 @@ func (cfg *CdkScriptorConfig) configureMathpixLambda(
 	return mathpixLambda
 }
 
-func (cfg *CdkScriptorConfig) configureClaudeLambda(
+func (cfg *CdkScriptorConfig) configureOpenAILambda(
 	stack awscdk.Stack,
 ) awslambda.Function {
-	claudeLambda := awslambda.NewFunction(
+	openAILambda := awslambda.NewFunction(
 		stack,
-		jsii.String("scriptorClaudeProcess"),
+		jsii.String("scriptorOpenAIProcess"),
 		&awslambda.FunctionProps{
 			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
 			Code: awslambda.AssetCode_FromAsset(
-				jsii.String("../bin/workflow_claude_process.zip"),
+				jsii.String("../bin/workflow_openai_process.zip"),
 				nil,
 			),
 			Handler: jsii.String("main"),
@@ -100,16 +100,16 @@ func (cfg *CdkScriptorConfig) configureClaudeLambda(
 		},
 	)
 
-	// grant the lambda permission to read the Claude API key secret
-	cfg.ClaudeSecrets.GrantRead(claudeLambda, nil)
+	// grant the lambda permission to read the OpenAI API key secret
+	cfg.OpenAISecrets.GrantRead(openAILambda, nil)
 
 	// grant the lambda read/write permissions to the S3 staging bucket
-	cfg.documentBucket.GrantReadWrite(claudeLambda, nil)
+	cfg.documentBucket.GrantReadWrite(openAILambda, nil)
 
 	// grant the lambda r/w permissions to the document table
-	cfg.documentProcessingStageTable.GrantReadWriteData(claudeLambda)
+	cfg.documentProcessingStageTable.GrantReadWriteData(openAILambda)
 
-	return claudeLambda
+	return openAILambda
 }
 
 func (cfg *CdkScriptorConfig) configureUploadLambda(
@@ -145,7 +145,7 @@ func (cfg *CdkScriptorConfig) configureUploadLambda(
 func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 	downloadLambda := cfg.configureDownloadLambda(stack)
 	mathpixLambda := cfg.configureMathpixLambda(stack)
-	claudeLambda := cfg.configureClaudeLambda(stack)
+	openAILambda := cfg.configureOpenAILambda(stack)
 	uploadLambda := cfg.configureUploadLambda(stack)
 
 	taskTimeout := awsstepfunctions.Timeout_Duration(
@@ -172,11 +172,11 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 		},
 	)
 
-	claudeTask := awsstepfunctionstasks.NewLambdaInvoke(
+	openAITask := awsstepfunctionstasks.NewLambdaInvoke(
 		stack,
-		jsii.String("ClaudeTask"),
+		jsii.String("OpenAITask"),
 		&awsstepfunctionstasks.LambdaInvokeProps{
-			LambdaFunction: claudeLambda,
+			LambdaFunction: openAILambda,
 			TaskTimeout:    taskTimeout,
 			OutputPath:     jsii.String("$.Payload"),
 		},
@@ -194,7 +194,7 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 
 	// Define workflow sequence
 	workflowDefinition := downloadTask.Next(mathpixTask).
-		Next(claudeTask).
+		Next(openAITask).
 		Next(uploadTask)
 
 	// Create Step Functions state machine

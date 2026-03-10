@@ -8,7 +8,7 @@ Scriptor is a Go monorepo for an AWS serverless document pipeline.
 - `cdk/stacks/`: AWS CDK (Go) infrastructure definitions
 - `bin/`: generated Lambda zip artifacts from `make all`
 
-Primary flow: webhook registration/ingest (`webhook_register`, `webhook_handler`, `sqs_handler`) then Step Functions tasks (`workflow_download`, `workflow_mathpix_process`, `workflow_claude_process`, `workflow_upload`).
+Primary flow: webhook registration/ingest (`webhook_register`, `webhook_handler`, `sqs_handler`) then Step Functions tasks (`workflow_download`, `workflow_mathpix_process`, `workflow_openai_process`, `workflow_upload`).
 
 Operational architecture, stage constraints, and runtime behavior are documented in `README.md`.
 
@@ -29,7 +29,7 @@ Operational architecture, stage constraints, and runtime behavior are documented
 - Lambda startup: use `sync.Once` to initialize clients/config once per container lifecycle.
 - Data access: create stores via `database.New*Store(ctx)` and pass `context.Context` through all DB operations.
 - Not-found handling: explicitly check expected DB errors (for example `ErrDocumentNotFound`, `ErrWatchChannelLockNotFound`) instead of treating them as fatal.
-- S3 object keys: follow `{documentID}/{stage}/{filename}.{ext}` with workflow stages like `downloaded`, `mathpix`, `claude`.
+- S3 object keys: follow `{documentID}/{stage}/{filename}.{ext}` with workflow stages like `downloaded`, `mathpix`, `openai`.
 - CDK IAM grants: prefer resource grant helpers on constructs (for example `GrantRead`, `GrantReadWriteData`, `GrantReadWrite`) over inline policy JSON.
 
 ## Testing Guidelines
@@ -47,5 +47,5 @@ Operational architecture, stage constraints, and runtime behavior are documented
   - relevant logs or screenshots for operational/UI-visible changes
 
 ## Security & Configuration Tips
-- Never commit secrets; use AWS Secrets Manager (`scriptor/google-service`, `scriptor/mathpix`, `scriptor/claude`, `scriptor/google-folder-defaults`).
+- Never commit secrets; use AWS Secrets Manager (`scriptor/google-service`, `scriptor/mathpix`, `scriptor/openai`, `scriptor/google-folder-defaults`).
 - Validate CDK changes with `make cdk-diff` before deploy.

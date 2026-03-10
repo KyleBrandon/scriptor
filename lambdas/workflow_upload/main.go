@@ -100,7 +100,7 @@ func (cfg *handlerConfig) getFileReaderForStage(
 		Key:    aws.String(s3FileKey),
 	})
 	if err != nil {
-		slog.Error("Failed to read the file processed by Claude", "error", err)
+		slog.Error("Failed to read the file processed by the LLM", "error", err)
 		return nil, err
 	}
 
@@ -118,7 +118,7 @@ func (cfg *handlerConfig) saveStageToFolder(
 	docReader, err := cfg.getFileReaderForStage(ctx, docStage.S3Key)
 	if err != nil {
 		slog.Error(
-			"Failed to get file reader for the Claude processed document",
+			"Failed to get file reader for the LLM processed document",
 			"error",
 			err,
 		)

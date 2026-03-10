@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,17 +13,25 @@ import (
 	"github.com/KyleBrandon/scriptor/lambdas/util"
 	"github.com/KyleBrandon/scriptor/pkg/database"
 	"github.com/KyleBrandon/scriptor/pkg/types"
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 type handlerConfig struct {
 	store        database.DocumentStore
 	s3Client     *s3.Client
-	claudeClient *anthropic.Client
+	openAIClient openai.Client
+}
+
+type openAIUploadFile struct {
+	*bytes.Reader
+	filename    string
+	contentType string
 }
 
 var (
@@ -64,6 +71,26 @@ Zettel:
 	FOOTER_TEMPLATE = "![[attachments/%s]]"
 )
 
+func newOpenAIUploadFile(
+	content []byte,
+	filename string,
+	contentType string,
+) *openAIUploadFile {
+	return &openAIUploadFile{
+		Reader:      bytes.NewReader(content),
+		filename:    filename,
+		contentType: contentType,
+	}
+}
+
+func (f *openAIUploadFile) Filename() string {
+	return f.filename
+}
+
+func (f *openAIUploadFile) ContentType() string {
+	return f.contentType
+}
+
 // Load all the inital configuration settings for the lambda
 func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 	cfg = &handlerConfig{}
@@ -84,9 +111,9 @@ func loadConfiguration(ctx context.Context) (*handlerConfig, error) {
 
 	cfg.s3Client = s3.NewFromConfig(awsCfg)
 
-	cfg.claudeClient, err = util.CreateClaudeClient(ctx, awsCfg)
+	cfg.openAIClient, err = util.CreateOpenAIClient(ctx, awsCfg)
 	if err != nil {
-		slog.Error("Failed to create a client to the Claude API", "error", err)
+		slog.Error("Failed to create an OpenAI client", "error", err)
 		return nil, err
 	}
 
@@ -187,12 +214,10 @@ func process(
 		return ret, err
 	}
 
-	pdfBase64 := base64.StdEncoding.EncodeToString(pdfBytes)
-
-	claudeStage, err := cfg.store.StartDocumentStage(
+	openAIStage, err := cfg.store.StartDocumentStage(
 		ctx,
 		event.DocumentID,
-		types.DOCUMENT_STAGE_CLAUDE,
+		types.DOCUMENT_STAGE_OPENAI,
 		prevStage.OriginalFileName,
 	)
 	if err != nil {
@@ -205,6 +230,43 @@ func process(
 		)
 		return ret, err
 	}
+
+	uploadedPDF, err := cfg.openAIClient.Files.New(
+		ctx,
+		openai.FileNewParams{
+			File: newOpenAIUploadFile(
+				pdfBytes,
+				downloadedStage.OriginalFileName,
+				"application/pdf",
+			),
+			Purpose: openai.FilePurposeUserData,
+		},
+	)
+	if err != nil {
+		slog.Error(
+			"Failed to upload the PDF to OpenAI",
+			"docName",
+			downloadedStage.OriginalFileName,
+			"error",
+			err,
+		)
+		return ret, err
+	}
+
+	defer func() {
+		_, deleteErr := cfg.openAIClient.Files.Delete(ctx, uploadedPDF.ID)
+		if deleteErr != nil {
+			slog.Warn(
+				"Failed to delete the temporary OpenAI file",
+				"docName",
+				downloadedStage.OriginalFileName,
+				"fileID",
+				uploadedPDF.ID,
+				"error",
+				deleteErr,
+			)
+		}
+	}()
 
 	resp, err := cfg.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(types.S3_BUCKET_NAME),
@@ -224,7 +286,7 @@ func process(
 	defer resp.Body.Close()
 
 	content, err := io.ReadAll(resp.Body)
-	if err != err {
+	if err != nil {
 		slog.Error(
 			"Failed to read the input document to clean up",
 			"docName",
@@ -235,31 +297,39 @@ func process(
 		return ret, err
 	}
 
-	// Create a prompt for Claude to clean up the Markdown
+	// Create a prompt for the LLM to clean up the Markdown
 	prompt := fmt.Sprintf(CHAT_PROMPT, content)
 
-	// Call the Claude API with the original PDF and Markdown prompt
-	claudeResp, err := cfg.claudeClient.Messages.New(
+	// Call the OpenAI Responses API with the original PDF and Markdown prompt.
+	openAIResp, err := cfg.openAIClient.Responses.New(
 		ctx,
-		anthropic.MessageNewParams{
-			Model:     anthropic.ModelClaudeSonnet4_5_20250929,
-			MaxTokens: 8192,
-			System: []anthropic.TextBlockParam{
-				{Text: SYSTEM_MESSAGE},
-			},
-			Messages: []anthropic.MessageParam{
-				anthropic.NewUserMessage(
-					anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
-						Data: pdfBase64,
-					}),
-					anthropic.NewTextBlock(prompt),
-				),
+		responses.ResponseNewParams{
+			Model:           shared.ResponsesModel(shared.ChatModelGPT5_4),
+			Instructions:    openai.String(SYSTEM_MESSAGE),
+			Reasoning:       shared.ReasoningParam{Effort: shared.ReasoningEffortHigh},
+			MaxOutputTokens: openai.Int(8192),
+			Input: responses.ResponseNewParamsInputUnion{
+				OfInputItemList: responses.ResponseInputParam{
+					responses.ResponseInputItemParamOfInputMessage(
+						responses.ResponseInputMessageContentListParam{
+							{
+								OfInputFile: &responses.ResponseInputFileParam{
+									FileID: openai.String(uploadedPDF.ID),
+								},
+							},
+							responses.ResponseInputContentParamOfInputText(
+								prompt,
+							),
+						},
+						"user",
+					),
+				},
 			},
 		},
 	)
 	if err != nil {
 		slog.Error(
-			"Claude API error",
+			"OpenAI API error",
 			"docName",
 			prevStage.OriginalFileName,
 			"error",
@@ -269,7 +339,7 @@ func process(
 	}
 
 	// Get the cleaned-up text
-	buffer := claudeResp.Content[0].Text
+	buffer := openAIResp.OutputText()
 
 	// Safety check: remove markdown code block wrapping if present
 	cleanedMarkdown := strings.TrimPrefix(
@@ -295,21 +365,21 @@ func process(
 	// Get the original document name w/o extension
 	documentName := util.GetNamePart(prevStage.OriginalFileName)
 
-	claudeStage.StageFileName = fmt.Sprintf(
+	openAIStage.StageFileName = fmt.Sprintf(
 		"%s-%d.md",
 		documentName,
 		time.Now().Unix(),
 	)
-	claudeStage.S3Key = fmt.Sprintf(
+	openAIStage.S3Key = fmt.Sprintf(
 		"%s/%s",
-		claudeStage.Stage,
-		claudeStage.StageFileName,
+		openAIStage.Stage,
+		openAIStage.StageFileName,
 	)
 
 	//
 	_, err = cfg.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(BucketName),
-		Key:           aws.String(claudeStage.S3Key),
+		Key:           aws.String(openAIStage.S3Key),
 		Body:          bytes.NewReader(body),
 		ContentType:   aws.String("text/markdown"),
 		ContentLength: aws.Int64(int64(len(body))),
@@ -320,7 +390,7 @@ func process(
 			"docName",
 			prevStage.OriginalFileName,
 			"key",
-			claudeStage.S3Key,
+			openAIStage.S3Key,
 			"error",
 			err,
 		)
@@ -328,7 +398,7 @@ func process(
 	}
 
 	// Update the stage to complete
-	err = cfg.store.CompleteDocumentStage(ctx, claudeStage)
+	err = cfg.store.CompleteDocumentStage(ctx, openAIStage)
 	if err != nil {
 		slog.Error(
 			"Failed to update the processing stage as complete",
@@ -343,7 +413,7 @@ func process(
 	// read doc from bucket
 	ret.NotificationID = event.NotificationID
 	ret.DocumentID = event.DocumentID
-	ret.Stage = types.DOCUMENT_STAGE_CLAUDE
+	ret.Stage = types.DOCUMENT_STAGE_OPENAI
 
 	return ret, nil
 }

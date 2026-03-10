@@ -23,7 +23,7 @@ type CdkScriptorConfig struct {
 	GoogleServiceKeySecret       awssecretsmanager.ISecret
 	DefaultFoldersSecret         awssecretsmanager.ISecret
 	MathpixSecrets               awssecretsmanager.ISecret
-	ClaudeSecrets                awssecretsmanager.ISecret
+	OpenAISecrets                awssecretsmanager.ISecret
 	watchChannelTable            awsdynamodb.Table
 	watchChannelLockTable        awsdynamodb.Table
 	documentTable                awsdynamodb.Table

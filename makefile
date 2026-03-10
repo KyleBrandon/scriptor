@@ -5,7 +5,7 @@ LAMBDA_NAMES = \
 	webhook_handler \
 	workflow_download \
 	workflow_mathpix_process \
-	workflow_claude_process \
+	workflow_openai_process \
 	workflow_upload
 
 # Directories
