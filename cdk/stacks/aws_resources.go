@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awss3notifications"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssecretsmanager"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssqs"
 	"github.com/aws/jsii-runtime-go"
@@ -130,6 +131,17 @@ func (cfg *CdkScriptorConfig) initializeDocumentTable(stack awscdk.Stack) {
 		},
 	)
 
+	cfg.documentTable.AddGlobalSecondaryIndex(
+		&awsdynamodb.GlobalSecondaryIndexProps{
+			IndexName: jsii.String("SourceKeyIndex"),
+			PartitionKey: &awsdynamodb.Attribute{
+				Name: jsii.String("source_key"),
+				Type: awsdynamodb.AttributeType_STRING,
+			},
+			ProjectionType: awsdynamodb.ProjectionType_ALL,
+		},
+	)
+
 	// register the DocumentProcessingStage table
 	cfg.documentProcessingStageTable = awsdynamodb.NewTable(
 		stack,
@@ -173,6 +185,25 @@ func (cfg *CdkScriptorConfig) initializeS3Buckets(stack awscdk.Stack) {
 		jsii.String("scriptorDocumentStagingBucket"),
 		&bucketProps,
 	)
+
+	rawEmailBucketProps := awss3.BucketProps{
+		BucketName:        jsii.String(types.RAW_EMAIL_BUCKET_NAME),
+		Versioned:         jsii.Bool(true),
+		RemovalPolicy:     awscdk.RemovalPolicy_RETAIN,
+		AutoDeleteObjects: jsii.Bool(false),
+		BlockPublicAccess: awss3.BlockPublicAccess_BLOCK_ALL(),
+		Encryption:        awss3.BucketEncryption_S3_MANAGED,
+	}
+	cfg.rawEmailBucket = awss3.NewBucket(
+		stack,
+		jsii.String("scriptorRawEmailBucket"),
+		&rawEmailBucketProps,
+	)
+
+	cfg.rawEmailBucket.AddEventNotification(
+		awss3.EventType_OBJECT_CREATED,
+		awss3notifications.NewSqsDestination(cfg.rawEmailQueue),
+	)
 }
 
 func (cfg *CdkScriptorConfig) initializeSQS(stack awscdk.Stack) {
@@ -199,6 +230,29 @@ func (cfg *CdkScriptorConfig) initializeSQS(stack awscdk.Stack) {
 			},
 		},
 	)
+
+	rawEmailDLQ := awssqs.NewQueue(
+		stack,
+		jsii.String("scriptorIncomingEmailDLQ"),
+		&awssqs.QueueProps{
+			QueueName: jsii.String("ScriptorIncomingEmailDLQ"),
+		},
+	)
+
+	cfg.rawEmailQueue = awssqs.NewQueue(
+		stack,
+		jsii.String("scriptorIncomingEmailQueue"),
+		&awssqs.QueueProps{
+			QueueName:              jsii.String("ScriptorIncomingEmailQueue"),
+			ReceiveMessageWaitTime: awscdk.Duration_Seconds(jsii.Number(10)),
+			RetentionPeriod:        awscdk.Duration_Days(jsii.Number(4)),
+			VisibilityTimeout:      awscdk.Duration_Minutes(jsii.Number(5)),
+			DeadLetterQueue: &awssqs.DeadLetterQueue{
+				Queue:           rawEmailDLQ,
+				MaxReceiveCount: jsii.Number(5),
+			},
+		},
+	)
 }
 
 func (cfg *CdkScriptorConfig) NewResourcesStack(id string) awscdk.Stack {
@@ -206,8 +260,8 @@ func (cfg *CdkScriptorConfig) NewResourcesStack(id string) awscdk.Stack {
 
 	cfg.initializeSecretsManager(stack)
 	cfg.initializeDynamoDB(stack)
-	cfg.initializeS3Buckets(stack)
 	cfg.initializeSQS(stack)
+	cfg.initializeS3Buckets(stack)
 
 	return stack
 

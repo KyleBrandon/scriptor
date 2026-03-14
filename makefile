@@ -1,5 +1,6 @@
 # Define Lambda names
 LAMBDA_NAMES = \
+	email_ingest \
 	sqs_handler \
 	webhook_register \
 	webhook_handler \

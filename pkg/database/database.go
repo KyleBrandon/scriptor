@@ -26,6 +26,7 @@ type (
 	DocumentStore interface {
 		InsertDocument(ctx context.Context, document *stypes.Document) error
 		GetDocument(ctx context.Context, id string) (*stypes.Document, error)
+		GetDocumentBySourceKey(ctx context.Context, sourceKey string) (*stypes.Document, error)
 		GetDocumentByGoogleID(ctx context.Context, googleFileID string) (*stypes.Document, error)
 		GetDocumentStage(ctx context.Context, id string, stage string) (*stypes.DocumentProcessingStage, error)
 		StartDocumentStage(

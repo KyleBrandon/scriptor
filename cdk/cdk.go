@@ -13,6 +13,7 @@ func main() {
 	cfg.NewWebhookHandlerStack("ScriptorWebhookProcessing")
 	cfg.NewWebHookRegisterStack("ScriptorWebHookReRegisterStack")
 	cfg.NewDocumentWorkflowStack("ScriptorDocumentWorkflow")
+	cfg.NewEmailIngestStack("ScriptorEmailIngestStack")
 	cfg.NewSQSHandlerStack("ScrptorSQSHandlerStack")
 
 	cfg.App.Synth(nil)

@@ -24,6 +24,9 @@ const (
 	// S3 bucket to store staging and final converted files
 	S3_BUCKET_NAME = "scriptor-documents"
 
+	// S3 bucket to store raw SES emails before parsing.
+	RAW_EMAIL_BUCKET_NAME = "scriptor-incoming-email"
+
 	//
 	// Document stage values
 	//
@@ -54,6 +57,13 @@ const (
 
 	// Document in error
 	DOCUMENT_ERROR = "document-error"
+
+	//
+	// Document source values
+	//
+
+	DOCUMENT_SOURCE_GOOGLE_DRIVE = "google_drive"
+	DOCUMENT_SOURCE_KINDLE_EMAIL = "kindle_email"
 )
 
 type (
@@ -114,13 +124,20 @@ type (
 	// Document state as it is being converted.
 	Document struct {
 		// ID is the partition key for the documents table
-		ID             string    `dynamodbav:"id"`
-		GoogleID       string    `dynamodbav:"google_id"`
-		GoogleFolderID string    `dynamodbav:"folder_id"`
-		Name           string    `dynamodbav:"name"`
-		Size           int64     `dynamodbav:"size"`
-		CreatedTime    time.Time `dynamodbav:"created_time"`
-		ModifiedTime   time.Time `dynamodbav:"modified_time"`
+		ID                   string    `dynamodbav:"id"`
+		SourceType           string    `dynamodbav:"source_type"`
+		SourceKey            string    `dynamodbav:"source_key"`
+		GoogleID             string    `dynamodbav:"google_id,omitempty"`
+		GoogleFolderID       string    `dynamodbav:"folder_id"`
+		Name                 string    `dynamodbav:"name"`
+		Size                 int64     `dynamodbav:"size"`
+		CreatedTime          time.Time `dynamodbav:"created_time"`
+		ModifiedTime         time.Time `dynamodbav:"modified_time"`
+		DownloadURL          string    `dynamodbav:"download_url"`
+		DownloadURLExpiresAt time.Time `dynamodbav:"download_url_expires_at"`
+		RawEmailS3Key        string    `dynamodbav:"raw_email_s3key"`
+		Sender               string    `dynamodbav:"sender"`
+		Recipient            string    `dynamodbav:"recipient"`
 	}
 
 	DocumentChanges struct {

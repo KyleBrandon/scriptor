@@ -29,7 +29,9 @@ type CdkScriptorConfig struct {
 	documentTable                awsdynamodb.Table
 	documentProcessingStageTable awsdynamodb.Table
 	documentBucket               awss3.Bucket
+	rawEmailBucket               awss3.Bucket
 	documentQueue                awssqs.Queue
+	rawEmailQueue                awssqs.Queue
 	stateMachine                 awsstepfunctions.StateMachine
 }
 

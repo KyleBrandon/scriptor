@@ -6,9 +6,9 @@ In medieval times, a scriptor was someone who copied manuscripts by hand. These 
 
 ## What is Scriptor?
 
-Scriptor is a set of lambdas and step functions that are deployed to AWS. They will monitor a Google Drive folder for PDF files uploaded, convert the PDF file to Markdown, clean it up, and they upload the newly created Markdown file and the original PDF to a destination folder while archiving the original.
+Scriptor is a set of lambdas and step functions that are deployed to AWS. They monitor supported document sources, convert PDFs to Markdown, clean them up, and upload the newly created Markdown file and the original PDF to a destination folder while archiving the original when the source supports archiving.
 
-There are five (5) AWS Lambda functions that are used to accomplish this.
+Scriptor currently supports Google Drive as a webhook-driven source and Kindle exports as an SES email-driven source.
 
 ### scriptorWebhookRegisterLambda
 
@@ -17,6 +17,10 @@ The scriptorWebhookRegisterLambda registers a webhook with Google Drive. The lam
 ### scriptorDownloadLambda
 
 This lambda is configured behind an API Gateway and will receive the webhook notification from Google Drive. It will confirm that the notification is for a valid watch channel that was registered. If valid, the folder associated with the watch channel is queried for any new files. These are then downloaded into a S3 downloaded staging area for processing in later stages. Once the file is downloaded a new state machine is triggered with the document information.
+
+### scriptorEmailIngestLambda
+
+This lambda is triggered from a SQS queue that receives notifications for raw SES emails stored in S3. It parses the Kindle export email, extracts the "Download PDF" link, resolves the signed S3 URL, downloads the PDF into the Scriptor staging bucket, and starts the Step Functions workflow at the `downloaded` stage.
 
 ### scriptorMathpixProcess
 
@@ -39,6 +43,8 @@ Documents progress through these stages:
 `new` -> `downloaded` -> `mathpix` -> `openai` -> `uploaded`
 
 Each stage tracks status (`pending`, `in-progress`, `complete`, `error`) in DynamoDB.
+
+Google Drive documents enter the workflow at `new`. Kindle email documents are staged by `scriptorEmailIngestLambda` first and then enter the workflow at `downloaded`.
 
 ### Runtime Limits and Reliability Rules
 

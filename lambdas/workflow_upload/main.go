@@ -267,18 +267,21 @@ func process(ctx context.Context, event types.DocumentStep) error {
 		return err
 	}
 
-	err = cfg.dc.Archive(document.GoogleID, cfg.folderLocations.ArchiveFolderID)
-	if err != nil {
-		slog.Error(
-			"Failed to archive the document",
-			"id",
-			event.DocumentID,
-			"folderID",
-			cfg.folderLocations.ArchiveFolderID,
-			"error",
-			err,
-		)
-		return err
+	if document.SourceType == types.DOCUMENT_SOURCE_GOOGLE_DRIVE &&
+		document.GoogleID != "" {
+		err = cfg.dc.Archive(document.GoogleID, cfg.folderLocations.ArchiveFolderID)
+		if err != nil {
+			slog.Error(
+				"Failed to archive the document",
+				"id",
+				event.DocumentID,
+				"folderID",
+				cfg.folderLocations.ArchiveFolderID,
+				"error",
+				err,
+			)
+			return err
+		}
 	}
 
 	// Update the stage to complete

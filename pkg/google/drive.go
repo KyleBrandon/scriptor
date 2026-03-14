@@ -259,6 +259,8 @@ func buildDocument(file *drive.File) (*types.Document, error) {
 
 	document := &types.Document{
 		ID:             uuid.New().String(),
+		SourceType:     types.DOCUMENT_SOURCE_GOOGLE_DRIVE,
+		SourceKey:      fmt.Sprintf("%s:%s", types.DOCUMENT_SOURCE_GOOGLE_DRIVE, file.Id),
 		GoogleID:       file.Id,
 		GoogleFolderID: file.Parents[0],
 		Name:           file.Name,

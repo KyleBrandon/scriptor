@@ -65,13 +65,36 @@ func (db *DocumentStoreContext) GetDocumentByGoogleID(
 	ctx context.Context,
 	googleFileID string,
 ) (*stypes.Document, error) {
+	return db.getDocumentByIndex(
+		ctx,
+		"GoogleFileIDIndex",
+		"google_id",
+		googleFileID,
+	)
+}
 
+func (db *DocumentStoreContext) GetDocumentBySourceKey(
+	ctx context.Context,
+	sourceKey string,
+) (*stypes.Document, error) {
+	return db.getDocumentByIndex(
+		ctx,
+		"SourceKeyIndex",
+		"source_key",
+		sourceKey,
+	)
+}
+
+func (db *DocumentStoreContext) getDocumentByIndex(
+	ctx context.Context,
+	indexName, attributeName, value string,
+) (*stypes.Document, error) {
 	queryInput := &dynamodb.QueryInput{
-		TableName:              aws.String(WATCH_CHANNEL_TABLE),
-		IndexName:              aws.String("GoogleFileIDIndex"),
-		KeyConditionExpression: aws.String("google_id = :googleID"),
+		TableName:              aws.String(DOCUMENT_TABLE),
+		IndexName:              aws.String(indexName),
+		KeyConditionExpression: aws.String(attributeName + " = :lookupValue"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":googleID": &types.AttributeValueMemberS{Value: googleFileID},
+			":lookupValue": &types.AttributeValueMemberS{Value: value},
 		},
 	}
 
@@ -87,7 +110,7 @@ func (db *DocumentStoreContext) GetDocumentByGoogleID(
 	util.Assert(
 		len(result.Items),
 		1,
-		"We should only have 1 file returned when querying by the Google file ID",
+		"We should only have 1 file returned when querying by the source index",
 	)
 
 	var documents []stypes.Document

@@ -1,6 +1,7 @@
 package stacks
 
 import (
+	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctions"
@@ -162,9 +163,9 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 		},
 	)
 
-	mathpixTask := awsstepfunctionstasks.NewLambdaInvoke(
+	mathpixTaskFromNew := awsstepfunctionstasks.NewLambdaInvoke(
 		stack,
-		jsii.String("MathpixTask"),
+		jsii.String("MathpixTaskFromNew"),
 		&awsstepfunctionstasks.LambdaInvokeProps{
 			LambdaFunction: mathpixLambda,
 			TaskTimeout:    taskTimeout,
@@ -172,9 +173,9 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 		},
 	)
 
-	openAITask := awsstepfunctionstasks.NewLambdaInvoke(
+	openAITaskFromNew := awsstepfunctionstasks.NewLambdaInvoke(
 		stack,
-		jsii.String("OpenAITask"),
+		jsii.String("OpenAITaskFromNew"),
 		&awsstepfunctionstasks.LambdaInvokeProps{
 			LambdaFunction: openAILambda,
 			TaskTimeout:    taskTimeout,
@@ -182,9 +183,9 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 		},
 	)
 
-	uploadTask := awsstepfunctionstasks.NewLambdaInvoke(
+	uploadTaskFromNew := awsstepfunctionstasks.NewLambdaInvoke(
 		stack,
-		jsii.String("UploadTask"),
+		jsii.String("UploadTaskFromNew"),
 		&awsstepfunctionstasks.LambdaInvokeProps{
 			LambdaFunction: uploadLambda,
 			TaskTimeout:    taskTimeout,
@@ -192,17 +193,81 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 		},
 	)
 
-	// Define workflow sequence
-	workflowDefinition := downloadTask.Next(mathpixTask).
-		Next(openAITask).
-		Next(uploadTask)
+	mathpixTaskFromDownloaded := awsstepfunctionstasks.NewLambdaInvoke(
+		stack,
+		jsii.String("MathpixTaskFromDownloaded"),
+		&awsstepfunctionstasks.LambdaInvokeProps{
+			LambdaFunction: mathpixLambda,
+			TaskTimeout:    taskTimeout,
+			OutputPath:     jsii.String("$.Payload"),
+		},
+	)
+
+	openAITaskFromDownloaded := awsstepfunctionstasks.NewLambdaInvoke(
+		stack,
+		jsii.String("OpenAITaskFromDownloaded"),
+		&awsstepfunctionstasks.LambdaInvokeProps{
+			LambdaFunction: openAILambda,
+			TaskTimeout:    taskTimeout,
+			OutputPath:     jsii.String("$.Payload"),
+		},
+	)
+
+	uploadTaskFromDownloaded := awsstepfunctionstasks.NewLambdaInvoke(
+		stack,
+		jsii.String("UploadTaskFromDownloaded"),
+		&awsstepfunctionstasks.LambdaInvokeProps{
+			LambdaFunction: uploadLambda,
+			TaskTimeout:    taskTimeout,
+			OutputPath:     jsii.String("$.Payload"),
+		},
+	)
+
+	stageSelector := awsstepfunctions.NewChoice(
+		stack,
+		jsii.String("StageSelector"),
+		nil,
+	)
+
+	invalidStage := awsstepfunctions.NewFail(
+		stack,
+		jsii.String("InvalidWorkflowStage"),
+		&awsstepfunctions.FailProps{
+			Cause: jsii.String("Unsupported document stage"),
+			Error: jsii.String("UnsupportedStage"),
+		},
+	)
+
+	workflowDefinition := stageSelector.
+		When(
+			awsstepfunctions.Condition_StringEquals(
+				jsii.String("$.stage"),
+				jsii.String(types.DOCUMENT_STAGE_NEW),
+			),
+			downloadTask.Next(mathpixTaskFromNew).
+				Next(openAITaskFromNew).
+				Next(uploadTaskFromNew),
+			nil,
+		).
+		When(
+			awsstepfunctions.Condition_StringEquals(
+				jsii.String("$.stage"),
+				jsii.String(types.DOCUMENT_STAGE_DOWNLOAD),
+			),
+			mathpixTaskFromDownloaded.Next(openAITaskFromDownloaded).
+				Next(uploadTaskFromDownloaded),
+			nil,
+		).
+		Otherwise(invalidStage)
 
 	// Create Step Functions state machine
 	cfg.stateMachine = awsstepfunctions.NewStateMachine(
 		stack,
 		jsii.String("FileProcessingStateMachine"),
 		&awsstepfunctions.StateMachineProps{
-			Definition: workflowDefinition,
+			DefinitionBody: awsstepfunctions.DefinitionBody_FromChainable(
+				workflowDefinition,
+			),
 			Timeout: awscdk.Duration_Minutes(
 				jsii.Number(15),
 			), // Workflow timeout
