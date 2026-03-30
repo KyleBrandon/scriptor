@@ -3,11 +3,14 @@ package stacks
 import (
 	"github.com/KyleBrandon/scriptor/pkg/types"
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctions"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsstepfunctionstasks"
 	"github.com/aws/jsii-runtime-go"
 )
+
+const sesSenderIdentityDomain = "brander-tech.com"
 
 func (cfg *CdkScriptorConfig) NewDocumentWorkflowStack(id string) awscdk.Stack {
 	stack := awscdk.NewStack(cfg.App, &id, &cfg.Props.StackProps)
@@ -143,11 +146,49 @@ func (cfg *CdkScriptorConfig) configureUploadLambda(
 	return uploadLambda
 }
 
+func (cfg *CdkScriptorConfig) configureEmailLambda(
+	stack awscdk.Stack,
+) awslambda.Function {
+	emailLambda := awslambda.NewFunction(
+		stack,
+		jsii.String("scriptorEmailSendLambda"),
+		&awslambda.FunctionProps{
+			Runtime: awslambda.Runtime_PROVIDED_AL2023(),
+			Code: awslambda.AssetCode_FromAsset(
+				jsii.String("../bin/workflow_email_send.zip"),
+				nil,
+			),
+			Handler: jsii.String("main"),
+			Timeout: awscdk.Duration_Minutes(jsii.Number(5)),
+		},
+	)
+
+	cfg.documentBucket.GrantRead(emailLambda, nil)
+	cfg.documentTable.GrantReadWriteData(emailLambda)
+	cfg.documentProcessingStageTable.GrantReadWriteData(emailLambda)
+	cfg.PostUploadEmailSecrets.GrantRead(emailLambda, nil)
+	emailLambda.AddToRolePolicy(
+		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Actions: jsii.Strings("ses:SendRawEmail"),
+			Resources: &[]*string{
+				awscdk.Stack_Of(stack).FormatArn(&awscdk.ArnComponents{
+					Service:      jsii.String("ses"),
+					Resource:     jsii.String("identity"),
+					ResourceName: jsii.String(sesSenderIdentityDomain),
+				}),
+			},
+		}),
+	)
+
+	return emailLambda
+}
+
 func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 	downloadLambda := cfg.configureDownloadLambda(stack)
 	mathpixLambda := cfg.configureMathpixLambda(stack)
 	openAILambda := cfg.configureOpenAILambda(stack)
 	uploadLambda := cfg.configureUploadLambda(stack)
+	emailLambda := cfg.configureEmailLambda(stack)
 
 	taskTimeout := awsstepfunctions.Timeout_Duration(
 		awscdk.Duration_Minutes(jsii.Number(3)),
@@ -223,6 +264,26 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 		},
 	)
 
+	emailTaskFromNew := awsstepfunctionstasks.NewLambdaInvoke(
+		stack,
+		jsii.String("EmailTaskFromNew"),
+		&awsstepfunctionstasks.LambdaInvokeProps{
+			LambdaFunction: emailLambda,
+			TaskTimeout:    taskTimeout,
+			OutputPath:     jsii.String("$.Payload"),
+		},
+	)
+
+	emailTaskFromDownloaded := awsstepfunctionstasks.NewLambdaInvoke(
+		stack,
+		jsii.String("EmailTaskFromDownloaded"),
+		&awsstepfunctionstasks.LambdaInvokeProps{
+			LambdaFunction: emailLambda,
+			TaskTimeout:    taskTimeout,
+			OutputPath:     jsii.String("$.Payload"),
+		},
+	)
+
 	stageSelector := awsstepfunctions.NewChoice(
 		stack,
 		jsii.String("StageSelector"),
@@ -246,7 +307,8 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 			),
 			downloadTask.Next(mathpixTaskFromNew).
 				Next(openAITaskFromNew).
-				Next(uploadTaskFromNew),
+				Next(uploadTaskFromNew).
+				Next(emailTaskFromNew),
 			nil,
 		).
 		When(
@@ -255,7 +317,8 @@ func (cfg *CdkScriptorConfig) configureStateMachine(stack awscdk.Stack) {
 				jsii.String(types.DOCUMENT_STAGE_DOWNLOAD),
 			),
 			mathpixTaskFromDownloaded.Next(openAITaskFromDownloaded).
-				Next(uploadTaskFromDownloaded),
+				Next(uploadTaskFromDownloaded).
+				Next(emailTaskFromDownloaded),
 			nil,
 		).
 		Otherwise(invalidStage)

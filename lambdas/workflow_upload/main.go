@@ -149,13 +149,18 @@ func (cfg *handlerConfig) saveStageToFolder(
 	return nil
 }
 
-func process(ctx context.Context, event types.DocumentStep) error {
+func process(
+	ctx context.Context,
+	event types.DocumentStep,
+) (types.DocumentStep, error) {
 	slog.Debug(">>process")
 	defer slog.Debug("<<process")
 
+	ret := types.DocumentStep{}
+
 	if err := initLambda(ctx); err != nil {
 		slog.Error("Failed to initialize the lambda", "error", err)
-		return err
+		return ret, err
 	}
 
 	// query the previous stage information
@@ -174,7 +179,7 @@ func process(ctx context.Context, event types.DocumentStep) error {
 			"error",
 			err,
 		)
-		return err
+		return ret, err
 	}
 
 	// Start the document upload stage
@@ -190,7 +195,7 @@ func process(ctx context.Context, event types.DocumentStep) error {
 			"error",
 			err,
 		)
-		return err
+		return ret, err
 	}
 
 	// query the download stage information stage information to get the original file
@@ -207,7 +212,7 @@ func process(ctx context.Context, event types.DocumentStep) error {
 			"error",
 			err,
 		)
-		return err
+		return ret, err
 	}
 
 	// get the document record from DynamoDB
@@ -220,7 +225,7 @@ func process(ctx context.Context, event types.DocumentStep) error {
 			"error",
 			err,
 		)
-		return err
+		return ret, err
 	}
 
 	baseName := util.GetNamePart(document.Name)
@@ -242,7 +247,7 @@ func process(ctx context.Context, event types.DocumentStep) error {
 			"error",
 			err,
 		)
-		return err
+		return ret, err
 	}
 
 	// Save the output from the last stage to the destination folder
@@ -264,7 +269,7 @@ func process(ctx context.Context, event types.DocumentStep) error {
 			"error",
 			err,
 		)
-		return err
+		return ret, err
 	}
 
 	if document.SourceType == types.DOCUMENT_SOURCE_GOOGLE_DRIVE &&
@@ -280,7 +285,7 @@ func process(ctx context.Context, event types.DocumentStep) error {
 				"error",
 				err,
 			)
-			return err
+			return ret, err
 		}
 	}
 
@@ -292,10 +297,14 @@ func process(ctx context.Context, event types.DocumentStep) error {
 			"error",
 			err,
 		)
-		return err
+		return ret, err
 	}
 
-	return nil
+	ret.NotificationID = event.NotificationID
+	ret.DocumentID = event.DocumentID
+	ret.Stage = types.DOCUMENT_STAGE_UPLOAD
+
+	return ret, nil
 }
 
 func main() {

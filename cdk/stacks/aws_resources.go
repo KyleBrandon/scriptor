@@ -42,6 +42,12 @@ func (cfg *CdkScriptorConfig) initializeSecretsManager(stack awscdk.Stack) {
 		jsii.String(types.OPENAI_SECRETS),
 	)
 
+	cfg.PostUploadEmailSecrets = awssecretsmanager.Secret_FromSecretNameV2(
+		stack,
+		jsii.String(types.POST_UPLOAD_EMAIL_SECRETS),
+		jsii.String(types.POST_UPLOAD_EMAIL_SECRETS),
+	)
+
 }
 
 func (cfg *CdkScriptorConfig) initializeWatchChannelLockTable(

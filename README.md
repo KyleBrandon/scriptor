@@ -32,7 +32,11 @@ This lambda is used to clean up the Markdown from Mathpix. The file from Mathpix
 
 ### scriptorUploadLambda
 
-This final step in the state machine will upload the final LLM-cleaned Markdown as well as the original PDF back to Google Drive into the configured destination folder. It will move the original PDF located in the monitor folder to a configured archive folder so it does not process it again inadvertently. Once done, the state machine is complete.
+This step in the state machine uploads the final LLM-cleaned Markdown as well as the original PDF back to Google Drive into the configured destination folder. It will move the original PDF located in the monitor folder to a configured archive folder so it does not process it again inadvertently.
+
+### scriptorEmailSendLambda
+
+This final step in the state machine emails the original PDF and the final generated Markdown as attachments to the configured recipients using Amazon SES.
 
 ## Architecture and Operational Constraints
 
@@ -40,7 +44,7 @@ This final step in the state machine will upload the final LLM-cleaned Markdown 
 
 Documents progress through these stages:
 
-`new` -> `downloaded` -> `mathpix` -> `openai` -> `uploaded`
+`new` -> `downloaded` -> `mathpix` -> `openai` -> `uploaded` -> `emailed`
 
 Each stage tracks status (`pending`, `in-progress`, `complete`, `error`) in DynamoDB.
 
@@ -185,3 +189,15 @@ Create a Secrets Manager secret titled `scriptor/openai` of type "Other type of 
 ##### OpenAI API Pricing
 
 Scriptor uses OpenAI for Markdown cleanup. Pricing is per-token and based on the size of each document processed. See [OpenAI pricing](https://openai.com/api/pricing/) for current rates.
+
+#### scriptor/post-upload-email
+
+This contains the outbound email settings used by the post-upload email Lambda.
+
+Create a Secrets Manager secret titled `scriptor/post-upload-email` of type "Other type of secret" with key/value pairs like:
+
+- `enabled`: `true`
+- `from_address`: `"scriptor@brander-tech.com"`
+- `to_addresses`: `["recipient@example.com"]`
+- `reply_to`: `["recipient@example.com"]`
+- `subject_prefix`: `"[Scriptor]"`

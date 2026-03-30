@@ -18,6 +18,9 @@ const (
 	// OpenAI secrets for using the OpenAI API
 	OPENAI_SECRETS = "scriptor/openai"
 
+	// Post-upload outbound email config.
+	POST_UPLOAD_EMAIL_SECRETS = "scriptor/post-upload-email"
+
 	// Google Drive folder identifiers for default monitoring
 	GOOGLE_FOLDER_DEFAULT_LOCATIONS_SECRETS = "scriptor/google-folder-defaults"
 
@@ -45,6 +48,9 @@ const (
 
 	// Document stage uploaded
 	DOCUMENT_STAGE_UPLOAD = "uploaded"
+
+	// Document stage emailed
+	DOCUMENT_STAGE_EMAIL = "emailed"
 
 	//
 	// Document status values
@@ -84,6 +90,15 @@ type (
 	// OpenAI API key
 	OpenAISecrets struct {
 		ApiKey string `json:"api_key"`
+	}
+
+	// Outbound email settings for the post-upload notification step.
+	PostUploadEmailConfig struct {
+		Enabled       bool     `json:"enabled"`
+		FromAddress   string   `json:"from_address"`
+		ToAddresses   []string `json:"to_addresses"`
+		ReplyTo       []string `json:"reply_to"`
+		SubjectPrefix string   `json:"subject_prefix"`
 	}
 
 	// WatchChannel represents a folder location to watch for new files to process.

@@ -3,7 +3,9 @@ package util
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/mail"
 	"path/filepath"
 	"strings"
 
@@ -165,4 +167,83 @@ func LoadMathpixSecrets(
 
 	return &mathpixSecrets, nil
 
+}
+
+func LoadPostUploadEmailConfig(
+	ctx context.Context,
+	awsCfg aws.Config,
+) (*types.PostUploadEmailConfig, error) {
+	sm := secretsmanager.NewFromConfig(awsCfg)
+
+	secret, err := getSecret(ctx, sm, types.POST_UPLOAD_EMAIL_SECRETS)
+	if err != nil {
+		slog.Error(
+			"Failed to get the post-upload email config from AWS secret manager",
+			"error",
+			err,
+		)
+		return nil, err
+	}
+
+	var cfg types.PostUploadEmailConfig
+	if err := json.Unmarshal([]byte(secret), &cfg); err != nil {
+		slog.Error(
+			"Failed to unmarshal the post-upload email config",
+			"error",
+			err,
+		)
+		return nil, err
+	}
+
+	cfg.SubjectPrefix = strings.TrimSpace(cfg.SubjectPrefix)
+	if cfg.SubjectPrefix == "" {
+		cfg.SubjectPrefix = "[Scriptor]"
+	}
+
+	if !cfg.Enabled {
+		return &cfg, nil
+	}
+
+	cfg.FromAddress = strings.TrimSpace(cfg.FromAddress)
+	if cfg.FromAddress == "" {
+		return nil, fmt.Errorf("from_address is required when email sending is enabled")
+	}
+
+	if _, err := mail.ParseAddress(cfg.FromAddress); err != nil {
+		return nil, fmt.Errorf("invalid from_address %q: %w", cfg.FromAddress, err)
+	}
+
+	cfg.ToAddresses, err = normalizeAndValidateAddresses(cfg.ToAddresses)
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.ToAddresses) == 0 {
+		return nil, fmt.Errorf("to_addresses must contain at least one address when email sending is enabled")
+	}
+
+	cfg.ReplyTo, err = normalizeAndValidateAddresses(cfg.ReplyTo)
+	if err != nil {
+		return nil, err
+	}
+
+	return &cfg, nil
+}
+
+func normalizeAndValidateAddresses(addresses []string) ([]string, error) {
+	normalized := []string{}
+
+	for _, address := range addresses {
+		address = strings.TrimSpace(address)
+		if address == "" {
+			continue
+		}
+
+		if _, err := mail.ParseAddress(address); err != nil {
+			return nil, fmt.Errorf("invalid email address %q: %w", address, err)
+		}
+
+		normalized = append(normalized, address)
+	}
+
+	return normalized, nil
 }

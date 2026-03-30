@@ -24,6 +24,7 @@ type CdkScriptorConfig struct {
 	DefaultFoldersSecret         awssecretsmanager.ISecret
 	MathpixSecrets               awssecretsmanager.ISecret
 	OpenAISecrets                awssecretsmanager.ISecret
+	PostUploadEmailSecrets       awssecretsmanager.ISecret
 	watchChannelTable            awsdynamodb.Table
 	watchChannelLockTable        awsdynamodb.Table
 	documentTable                awsdynamodb.Table

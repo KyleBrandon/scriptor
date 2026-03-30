@@ -6,17 +6,19 @@ require (
 	github.com/aws/aws-cdk-go/awscdk/v2 v2.185.0
 	github.com/aws/aws-lambda-go v1.47.0
 	github.com/aws/aws-sdk-go v1.55.6
-	github.com/aws/aws-sdk-go-v2 v1.36.3
+	github.com/aws/aws-sdk-go-v2 v1.41.2
 	github.com/aws/aws-sdk-go-v2/config v1.29.8
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.18.6
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.41.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.78.1
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.35.0
+	github.com/aws/aws-sdk-go-v2/service/ses v1.34.19
 	github.com/aws/aws-sdk-go-v2/service/sfn v1.35.1
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.38.1
 	github.com/aws/jsii-runtime-go v1.109.0
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go/v3 v3.26.0
+	golang.org/x/net v0.41.0
 	golang.org/x/oauth2 v0.30.0
 	google.golang.org/api v0.223.0
 )
@@ -29,8 +31,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.10 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.61 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.30 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.34 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.34 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.18 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.18 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.34 // indirect
 	github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.25.0 // indirect
@@ -43,7 +45,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.29.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.16 // indirect
 	github.com/aws/constructs-go/constructs/v10 v10.4.2 // indirect
-	github.com/aws/smithy-go v1.22.2 // indirect
+	github.com/aws/smithy-go v1.24.1 // indirect
 	github.com/cdklabs/awscdk-asset-awscli-go/awscliv1/v2 v2.2.227 // indirect
 	github.com/cdklabs/awscdk-asset-node-proxy-agent-go/nodeproxyagentv6/v2 v2.1.0 // indirect
 	github.com/cdklabs/cloud-assembly-schema-go/awscdkcloudassemblyschema/v40 v40.7.0 // indirect
@@ -69,7 +71,6 @@ require (
 	golang.org/x/crypto v0.40.0 // indirect
 	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616 // indirect
 	golang.org/x/mod v0.25.0 // indirect
-	golang.org/x/net v0.41.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/text v0.27.0 // indirect

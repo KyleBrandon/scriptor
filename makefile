@@ -7,7 +7,8 @@ LAMBDA_NAMES = \
 	workflow_download \
 	workflow_mathpix_process \
 	workflow_openai_process \
-	workflow_upload
+	workflow_upload \
+	workflow_email_send
 
 # Directories
 BIN_DIR = ./bin

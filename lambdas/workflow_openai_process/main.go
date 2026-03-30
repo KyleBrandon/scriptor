@@ -69,6 +69,8 @@ Zettel:
 `
 
 	FOOTER_TEMPLATE = "![[attachments/%s]]"
+
+	OPENAI_MAX_OUTPUT_TOKENS = 16384
 )
 
 func newOpenAIUploadFile(
@@ -306,8 +308,8 @@ func process(
 		responses.ResponseNewParams{
 			Model:           shared.ResponsesModel(shared.ChatModelGPT5_4),
 			Instructions:    openai.String(SYSTEM_MESSAGE),
-			Reasoning:       shared.ReasoningParam{Effort: shared.ReasoningEffortHigh},
-			MaxOutputTokens: openai.Int(8192),
+			Reasoning:       shared.ReasoningParam{Effort: shared.ReasoningEffortMedium},
+			MaxOutputTokens: openai.Int(OPENAI_MAX_OUTPUT_TOKENS),
 			Input: responses.ResponseNewParamsInputUnion{
 				OfInputItemList: responses.ResponseInputParam{
 					responses.ResponseInputItemParamOfInputMessage(
@@ -338,14 +340,72 @@ func process(
 		return ret, err
 	}
 
-	// Get the cleaned-up text
-	buffer := openAIResp.OutputText()
+	if openAIResp.Error.Message != "" {
+		err = fmt.Errorf(
+			"openai response error status=%s code=%s message=%s",
+			openAIResp.Status,
+			openAIResp.Error.Code,
+			openAIResp.Error.Message,
+		)
+		slog.Error(
+			"OpenAI returned an error response",
+			"docName",
+			prevStage.OriginalFileName,
+			"responseID",
+			openAIResp.ID,
+			"status",
+			openAIResp.Status,
+			"error",
+			err,
+		)
+		return ret, err
+	}
 
-	// Safety check: remove markdown code block wrapping if present
-	cleanedMarkdown := strings.TrimPrefix(
-		strings.TrimSuffix(string(buffer), "```"),
-		"```markdown",
-	)
+	if openAIResp.Status != responses.ResponseStatusCompleted {
+		partialOutput := cleanMarkdownResponse(openAIResp.OutputText())
+		err = fmt.Errorf(
+			"openai response did not complete status=%s incomplete_reason=%s",
+			openAIResp.Status,
+			openAIResp.IncompleteDetails.Reason,
+		)
+		slog.Error(
+			"OpenAI returned an incomplete response",
+			"docName",
+			prevStage.OriginalFileName,
+			"responseID",
+			openAIResp.ID,
+			"status",
+			openAIResp.Status,
+			"incompleteReason",
+			openAIResp.IncompleteDetails.Reason,
+			"partialOutputLength",
+			len(partialOutput),
+			"maxOutputTokens",
+			OPENAI_MAX_OUTPUT_TOKENS,
+			"error",
+			err,
+		)
+		return ret, err
+	}
+
+	cleanedMarkdown := cleanMarkdownResponse(openAIResp.OutputText())
+	if cleanedMarkdown == "" {
+		err = fmt.Errorf("openai response contained no output text")
+		slog.Error(
+			"OpenAI returned empty markdown content",
+			"docName",
+			prevStage.OriginalFileName,
+			"responseID",
+			openAIResp.ID,
+			"status",
+			openAIResp.Status,
+			"outputCount",
+			len(openAIResp.Output),
+			"error",
+			err,
+		)
+		return ret, err
+	}
 
 	// TODO: This should be a configuration
 	// build the header and footer for the note
@@ -416,6 +476,23 @@ func process(
 	ret.Stage = types.DOCUMENT_STAGE_OPENAI
 
 	return ret, nil
+}
+
+func cleanMarkdownResponse(raw string) string {
+	cleaned := strings.TrimSpace(raw)
+
+	if strings.HasPrefix(cleaned, "```markdown") {
+		cleaned = strings.TrimPrefix(cleaned, "```markdown")
+	} else if strings.HasPrefix(cleaned, "```md") {
+		cleaned = strings.TrimPrefix(cleaned, "```md")
+	} else if strings.HasPrefix(cleaned, "```") {
+		cleaned = strings.TrimPrefix(cleaned, "```")
+	}
+
+	cleaned = strings.TrimSpace(cleaned)
+	cleaned = strings.TrimSuffix(cleaned, "```")
+
+	return strings.TrimSpace(cleaned)
 }
 
 func main() {
